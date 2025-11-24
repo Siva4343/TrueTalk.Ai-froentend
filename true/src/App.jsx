@@ -1,35 +1,30 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+// src/App.jsx
+import React from "react";
+import { Routes, Route, Navigate } from "react-router-dom";
 
-function App() {
-  const [count, setCount] = useState(0)
+// use exact filenames (including .jsx) to avoid Vite resolution issues
+import Home from "./pages/Home.jsx";
+import MeetingPage from "./pages/Meeting.jsx";
+import Join from "./pages/Join.jsx";
+import Landing from "./pages/landing.jsx";
 
+export default function App() {
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
-}
+    <Routes>
+      {/* landing / home */}
+      <Route path="/" element={<Home />} />
 
-export default App
+      {/* older landing page if you want to preview it */}
+      <Route path="/landing" element={<Landing />} />
+
+      {/* join page (if you have a join-specific UI) */}
+      <Route path="/join" element={<Join />} />
+
+      {/* meeting route with room id param */}
+      <Route path="/meet/:roomId" element={<MeetingPage />} />
+
+      {/* fallback: redirect unknown routes to home */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
