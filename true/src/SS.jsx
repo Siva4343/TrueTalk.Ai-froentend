@@ -7,18 +7,31 @@ const SS = () => {
   const [fileType, setFileType] = useState("image");
   const [files, setFiles] = useState([]);
 
-  const fetchFiles = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/upload/`);
-      const data = await res.json();
-      setFiles(data);
-    } catch (err) {
-      console.log("Fetch error:", err);
-    }
+  // Safe function to load files
+  const getFiles = async () => {
+    const res = await fetch(`${API_BASE}/upload/`);
+    if (!res.ok) throw new Error("Failed to fetch files");
+    return await res.json();
   };
 
+
   useEffect(() => {
-    fetchFiles();
+    let mounted = true;
+
+    const loadFiles = async () => {
+      try {
+        const data = await getFiles();
+        if (mounted) setFiles(data);
+      } catch (err) {
+        console.log("Fetch error:", err);
+      }
+    };
+
+    loadFiles();
+
+    return () => {
+      mounted = false; 
+    };
   }, []);
 
   const uploadFile = async () => {
@@ -36,7 +49,10 @@ const SS = () => {
 
       alert("Uploaded successfully!");
       setFile(null);
-      fetchFiles();
+
+      // Refresh list
+      const data = await getFiles();
+      setFiles(data);
     } catch (err) {
       console.log("Upload error:", err);
     }
@@ -132,3 +148,4 @@ const SS = () => {
 };
 
 export default SS;
+
