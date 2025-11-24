@@ -1,0 +1,38 @@
+/* src/styles/index.css — dark base for premium look */
+:root{
+  --bg-1: #031026;
+  --bg-2: #081428;
+  --muted: #97a6b6;
+  --muted-2: #7890a6;
+  --accent-a: #5fe0ff;
+  --accent-b: #6a7cff;
+  --card-bg: rgba(12,18,28,0.5);
+  --glass: rgba(255,255,255,0.03);
+  --text: #e6f6ff;
+  --panel-border: rgba(255,255,255,0.045);
+  --radius: 14px;
+  --maxwidth: 1200px;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+}
+
+/* global reset + dark background */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+  color: var(--text);
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
+
+/* basic */
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; }
+* { box-sizing: border-box; }
+
+/* ensure main containers don't span uselessly on small screens */
+.container {
+  max-width: var(--maxwidth);
+  margin: 0 auto;
+  padding: 0 20px;
+}
