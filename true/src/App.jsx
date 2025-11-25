@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import BBc from './BB.jsx'
-
+// import BBc from './BB.jsx'
+import Abc from './Abc'
 function App() {
   return(
     <div>
-      <BBc/>
+      {/* <BBc/> */}
+      <Abc/>
     </div>
   )
 }
