@@ -4,11 +4,14 @@ import "./ang.css";
 // API base URL - adjust this to your Django server URL
 const API_BASE_URL = "http://localhost:8000/api";
 
-// Job List Component
+// Job List Component (unchanged)
 const JobList = ({ onJobSelect }) => {
   const [jobs, setJobs] = useState([]);
+  const [filteredJobs, setFilteredJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [locationFilter, setLocationFilter] = useState("");
 
   // Fetch jobs from backend
   const fetchJobs = async () => {
@@ -22,12 +25,49 @@ const JobList = ({ onJobSelect }) => {
       
       const data = await response.json();
       setJobs(data);
+      setFilteredJobs(data);
     } catch (err) {
       setError("Failed to load jobs. Please try again later.");
       console.error("Error fetching jobs:", err);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Apply search and filters
+  useEffect(() => {
+    let results = jobs;
+
+    // Apply search
+    if (searchTerm) {
+      results = results.filter(job =>
+        job.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        job.company.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        job.description.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    // Apply location filter
+    if (locationFilter) {
+      results = results.filter(job =>
+        job.location.toLowerCase().includes(locationFilter.toLowerCase())
+      );
+    }
+
+    setFilteredJobs(results);
+  }, [jobs, searchTerm, locationFilter]);
+
+  const handleSearchChange = (e) => {
+    setSearchTerm(e.target.value);
+  };
+
+  const handleLocationChange = (e) => {
+    setLocationFilter(e.target.value);
+  };
+
+  const clearFilters = () => {
+    setSearchTerm("");
+    setLocationFilter("");
   };
 
   useEffect(() => {
@@ -37,7 +77,38 @@ const JobList = ({ onJobSelect }) => {
   if (loading) {
     return (
       <div className="job-list">
-        <h2 className="section-title">Available Jobs</h2>
+        <div className="section-header">
+          <h2 className="section-title">Available Jobs</h2>
+          <div className="search-filter-container">
+            <div className="search-box">
+              <input
+                type="text"
+                placeholder="Search jobs, companies..."
+                value={searchTerm}
+                onChange={handleSearchChange}
+                className="search-input"
+                disabled
+              />
+              <span className="search-icon">🔍</span>
+            </div>
+            <div className="location-box">
+              <input
+                type="text"
+                placeholder="Filter by location..."
+                value={locationFilter}
+                onChange={handleLocationChange}
+                className="location-input"
+                disabled
+              />
+              <span className="location-icon">📍</span>
+            </div>
+            {(searchTerm || locationFilter) && (
+              <button onClick={clearFilters} className="clear-filters-btn">
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
         <div className="loading">Loading jobs...</div>
       </div>
     );
@@ -46,7 +117,36 @@ const JobList = ({ onJobSelect }) => {
   if (error) {
     return (
       <div className="job-list">
-        <h2 className="section-title">Available Jobs</h2>
+        <div className="section-header">
+          <h2 className="section-title">Available Jobs</h2>
+          <div className="search-filter-container">
+            <div className="search-box">
+              <input
+                type="text"
+                placeholder="Search jobs, companies..."
+                value={searchTerm}
+                onChange={handleSearchChange}
+                className="search-input"
+              />
+              <span className="search-icon">🔍</span>
+            </div>
+            <div className="location-box">
+              <input
+                type="text"
+                placeholder="Filter by location..."
+                value={locationFilter}
+                onChange={handleLocationChange}
+                className="location-input"
+              />
+              <span className="location-icon">📍</span>
+            </div>
+            {(searchTerm || locationFilter) && (
+              <button onClick={clearFilters} className="clear-filters-btn">
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
         <div className="error">{error}</div>
         <button onClick={fetchJobs} className="retry-btn">
           Retry
@@ -57,38 +157,86 @@ const JobList = ({ onJobSelect }) => {
 
   return (
     <div className="job-list">
-      <h2 className="section-title">Available Jobs</h2>
-      <div className="jobs-grid">
-        {jobs.map(job => (
-          <div key={job.id} className="job-card" onClick={() => onJobSelect(job)}>
-            <div className="job-header">
-              <h3 className="job-title">{job.title}</h3>
-              <span className="company-name">{job.company}</span>
-            </div>
-            <div className="job-details">
-              <div className="detail-item">
-                <span className="icon">📍</span>
-                <span>{job.location}</span>
-              </div>
-              <div className="detail-item">
-                <span className="icon">💰</span>
-                <span>${job.salary}</span>
-              </div>
-              <div className="detail-item">
-                <span className="icon">⚡</span>
-                <span>{job.get_employment_type_display || job.employment_type}</span>
-              </div>
-            </div>
-            <p className="job-description">{job.description}</p>
-            <button className="apply-btn">Apply Now</button>
+      <div className="section-header">
+        <h2 className="section-title">Available Jobs</h2>
+        <div className="search-filter-container">
+          <div className="search-box">
+            <input
+              type="text"
+              placeholder="Search jobs, companies..."
+              value={searchTerm}
+              onChange={handleSearchChange}
+              className="search-input"
+            />
+            <span className="search-icon">🔍</span>
           </div>
-        ))}
+          <div className="location-box">
+            <input
+              type="text"
+              placeholder="Filter by location..."
+              value={locationFilter}
+              onChange={handleLocationChange}
+              className="location-input"
+            />
+            <span className="location-icon">📍</span>
+          </div>
+          {(searchTerm || locationFilter) && (
+            <button onClick={clearFilters} className="clear-filters-btn">
+              Clear
+            </button>
+          )}
+        </div>
       </div>
+
+      {filteredJobs.length === 0 ? (
+        <div className="empty-state">
+          <p>No jobs found matching your criteria.</p>
+          <button onClick={clearFilters} className="retry-btn">
+            Clear Filters
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="results-count">
+            Showing {filteredJobs.length} of {jobs.length} jobs
+          </div>
+          <div className="jobs-grid">
+            {filteredJobs.map(job => (
+              <div key={job.id} className="job-card" onClick={() => onJobSelect(job)}>
+                <div className="job-header">
+                  <h3 className="job-title">{job.title}</h3>
+                  <span className="company-name">{job.company}</span>
+                </div>
+                <div className="job-details">
+                  <div className="detail-item">
+                    <span className="icon">📍</span>
+                    <span>{job.location}</span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="icon">💰</span>
+                    <span>${job.salary}</span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="icon">⚡</span>
+                    <span>{job.get_employment_type_display || job.employment_type}</span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="icon">🎯</span>
+                    <span>{job.get_experience_level_display || job.experience_level}</span>
+                  </div>
+                </div>
+                <p className="job-description">{job.description}</p>
+                <button className="apply-btn">Apply Now</button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 };
 
-// Job Apply Component
+// Job Apply Component (unchanged)
 const JobApply = ({ job, onCancel, onSuccess }) => {
   const [formData, setFormData] = useState({
     name: "",
@@ -110,7 +258,6 @@ const JobApply = ({ job, onCancel, onSuccess }) => {
     setError(null);
 
     try {
-      // Create FormData for file upload
       const submitData = new FormData();
       submitData.append('job', job.id);
       submitData.append('cover_letter', formData.cover_letter);
@@ -124,7 +271,6 @@ const JobApply = ({ job, onCancel, onSuccess }) => {
       const response = await fetch(`${API_BASE_URL}/jobs/apply/`, {
         method: 'POST',
         body: submitData,
-        // Don't set Content-Type header for FormData - browser will set it automatically with boundary
       });
 
       if (!response.ok) {
@@ -299,7 +445,7 @@ const JobApply = ({ job, onCancel, onSuccess }) => {
   );
 };
 
-// Application List Component
+// Application List Component (unchanged)
 const ApplicationList = () => {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -432,7 +578,7 @@ const ApplicationList = () => {
   );
 };
 
-// Post Job Component
+// Post Job Component (unchanged)
 const PostJob = ({ onCancel, onSuccess }) => {
   const [formData, setFormData] = useState({
     title: "",
@@ -621,7 +767,7 @@ const PostJob = ({ onCancel, onSuccess }) => {
   );
 };
 
-// Main App Component
+// Main App Component - UPDATED with right-aligned navigation in single row
 export default function App() {
   const [selectedJob, setSelectedJob] = useState(null);
   const [showApplications, setShowApplications] = useState(false);
@@ -631,38 +777,36 @@ export default function App() {
     <div className="app-container">
       {/* Header */}
       <header className="app-header">
-        <div className="header-top">
+        <div className="header-content">
           <h1 className="app-title">Job Portal</h1>
-          <button 
-            className="post-job-btn"
-            onClick={() => setShowPostJob(true)}
-          >
-            📝 Post Job
-          </button>
-        </div>
-
-        <div className="header-actions">
-          <button
-            onClick={() => {
-              setShowApplications(false);
-              setSelectedJob(null);
-              setShowPostJob(false);
-            }}
-            className={`nav-btn ${!showApplications && !showPostJob ? 'nav-btn-active' : ''}`}
-          >
-            Browse Jobs
-          </button>
-
-          <button
-            onClick={() => {
-              setShowApplications(true);
-              setSelectedJob(null);
-              setShowPostJob(false);
-            }}
-            className={`nav-btn ${showApplications ? 'nav-btn-active' : ''}`}
-          >
-            My Applications
-          </button>
+          <div className="nav-buttons-container">
+            <button 
+              className="post-job-btn"
+              onClick={() => setShowPostJob(true)}
+            >
+              📝 Post Job
+            </button>
+            <button
+              onClick={() => {
+                setShowApplications(false);
+                setSelectedJob(null);
+                setShowPostJob(false);
+              }}
+              className={`nav-btn ${!showApplications && !showPostJob ? 'nav-btn-active' : ''}`}
+            >
+              Browse Jobs
+            </button>
+            <button
+              onClick={() => {
+                setShowApplications(true);
+                setSelectedJob(null);
+                setShowPostJob(false);
+              }}
+              className={`nav-btn ${showApplications ? 'nav-btn-active' : ''}`}
+            >
+              My Applications
+            </button>
+          </div>
         </div>
       </header>
 
@@ -694,4 +838,4 @@ export default function App() {
       </div>
     </div>
   );
-};
+}
