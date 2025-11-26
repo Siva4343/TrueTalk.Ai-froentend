@@ -1,5 +1,5 @@
 import React from "react";
-import CalendarPage from '../CalendarPage'
+import CalendarPage from './Pages/CalendarPage'
 
 export default function App(){
   return (
