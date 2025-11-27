@@ -58,6 +58,265 @@ export default function MeetingPage() {
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
 
+  // REAL Recording state - REPLACED with actual recording functionality
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [recordedChunks, setRecordedChunks] = useState([]);
+  const [recordedBlob, setRecordedBlob] = useState(null);
+  const [recordedUrl, setRecordedUrl] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingStartTime, setRecordingStartTime] = useState(null);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [recordingStartedBy, setRecordingStartedBy] = useState(null);
+  const [lastRecordingUrl, setLastRecordingUrl] = useState(null);
+
+  // Recording timer effect
+  useEffect(() => {
+    let interval;
+    if (isRecording && recordingStartTime) {
+      interval = setInterval(() => {
+        setRecordingTime(Math.floor((Date.now() - recordingStartTime) / 1000));
+      }, 1000);
+    } else {
+      setRecordingTime(0);
+    }
+    return () => clearInterval(interval);
+  }, [isRecording, recordingStartTime]);
+
+  // REAL Recording handler - REPLACED with actual recording functionality
+  const handleStartRecording = async () => {
+    try {
+      console.log("🟢 Starting recording...");
+      
+      // Get the media stream from your camera
+      const stream = mediaStreamRef.current;
+      
+      if (!stream) {
+        alert("❌ No media stream available for recording. Please make sure your camera is enabled.");
+        return;
+      }
+
+      console.log("📹 Media stream obtained:", stream.getTracks().map(t => t.kind));
+
+      // Check if MediaRecorder is supported
+      if (typeof MediaRecorder === 'undefined') {
+        alert("❌ Recording not supported in this browser. Please use Chrome, Firefox, or Edge.");
+        return;
+      }
+
+      // Try different MIME types for compatibility
+      let options = { mimeType: 'video/webm;codecs=vp9,opus' };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = { mimeType: 'video/webm;codecs=vp8,opus' };
+      }
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = { mimeType: 'video/webm' };
+      }
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = {}; // Let browser choose default
+      }
+
+      console.log("🎬 Using MIME type:", options.mimeType || 'browser-default');
+
+      const recorder = new MediaRecorder(stream, options);
+      const chunks = [];
+
+      // Handle data available event
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data);
+          console.log("📦 Recording chunk:", event.data.size, "bytes");
+        }
+      };
+
+      // Handle recording stop - THIS IS WHERE THE DOWNLOAD HAPPENS
+      recorder.onstop = () => {
+        console.log("🛑 Recording stopped, processing data...");
+        
+        if (chunks.length === 0) {
+          console.warn("⚠️ No recording data captured");
+          alert("No recording data was captured. Please try again.");
+          return;
+        }
+
+        // Create the final video blob
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        
+        console.log("🎉 Recording completed:", {
+          size: blob.size,
+          type: blob.type,
+          chunks: chunks.length
+        });
+
+        // Store the recording for preview/download
+        setRecordedBlob(blob);
+        setRecordedUrl(url);
+        setRecordedChunks(chunks);
+        setLastRecordingUrl(url);
+
+        // AUTO-DOWNLOAD THE RECORDING
+        const timestamp = new Date().toISOString()
+          .replace(/[:.]/g, '-')
+          .replace('T', '_')
+          .split('Z')[0];
+        
+        const filename = `meeting-recording-${roomId}-${timestamp}.webm`;
+        
+        console.log("📥 Auto-downloading recording:", filename);
+        
+        // Create download link and trigger download
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.style.display = 'none';
+        
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        // Clean up URL object after download
+        setTimeout(() => {
+          URL.revokeObjectURL(url);
+          console.log("🧹 Cleaned up recording URL");
+        }, 1000);
+
+        // Show success message
+        const downloadMessage = {
+          type: "system",
+          text: `📥 Recording downloaded automatically (${formatFileSize(blob.size)})`,
+          time: Date.now(),
+          _localId: `download-${Date.now()}`
+        };
+        setChatMessages(prev => [...prev, downloadMessage]);
+      };
+
+      // Handle recording errors
+      recorder.onerror = (event) => {
+        console.error("❌ MediaRecorder error:", event);
+        alert(`Recording error: ${event.error?.message || 'Unknown error'}`);
+        setIsRecording(false);
+        setRecordingStartTime(null);
+      };
+
+      // Start recording with 1-second chunks for better performance
+      recorder.start(1000);
+      console.log("🎥 Recording started successfully");
+      
+      setMediaRecorder(recorder);
+      setIsRecording(true);
+      setRecordingStartTime(Date.now());
+      setRecordingStartedBy(name);
+      setRecordedChunks([]);
+
+      // Send notification to other participants
+      sendHostCommand && sendHostCommand(roomId, { 
+        type: "record-toggle", 
+        enabled: true,
+        startTime: Date.now(),
+        startedBy: name,
+        startedById: mySocketId
+      });
+
+      const recordingMessage = {
+        type: "system",
+        text: `🔴 Recording started by ${name}`,
+        time: Date.now(),
+        _localId: `recording-start-${Date.now()}`
+      };
+      setChatMessages(prev => [...prev, recordingMessage]);
+
+    } catch (error) {
+      console.error("❌ Error starting recording:", error);
+      alert(`Recording failed to start: ${error.message}`);
+      setIsRecording(false);
+      setRecordingStartTime(null);
+    }
+  };
+
+  // REAL Stop recording handler - REPLACED with actual recording functionality
+  const handleStopRecording = () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      console.log("🛑 Stopping recording...");
+      mediaRecorder.stop();
+    } else {
+      console.warn("⚠️ No active recording to stop");
+    }
+    
+    const duration = recordingTime;
+    setIsRecording(false);
+    setRecordingStartTime(null);
+    setRecordingStartedBy(null);
+
+    // Send stop notification to other participants
+    sendHostCommand && sendHostCommand(roomId, { 
+      type: "record-toggle", 
+      enabled: false,
+      duration: duration,
+      stoppedBy: name
+    });
+
+    const recordingMessage = {
+      type: "system",
+      text: `⏹️ Recording stopped. Duration: ${formatRecordingTime(duration)}. File is downloading...`,
+      time: Date.now(),
+      _localId: `recording-stop-${Date.now()}`
+    };
+    setChatMessages(prev => [...prev, recordingMessage]);
+  };
+
+  // Manual download function (in case auto-download fails)
+  const handleDownloadRecording = () => {
+    if (!recordedBlob && !lastRecordingUrl) {
+      alert("No recording available to download. Please start and stop a recording first.");
+      return;
+    }
+
+    const timestamp = new Date().toISOString()
+      .replace(/[:.]/g, '-')
+      .replace('T', '_')
+      .split('Z')[0];
+    
+    const filename = `meeting-recording-${roomId}-${timestamp}.webm`;
+    
+    // Use the last recording URL if available, otherwise create new one
+    const downloadUrl = lastRecordingUrl || URL.createObjectURL(recordedBlob);
+    
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = filename;
+    a.style.display = 'none';
+    
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    // Show download confirmation
+    const downloadMessage = {
+      type: "system",
+      text: `📥 Recording re-downloaded by ${name}`,
+      time: Date.now(),
+      _localId: `download-${Date.now()}`
+    };
+    setChatMessages(prev => [...prev, downloadMessage]);
+  };
+
+  // Helper function to format file size
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // Helper function to format recording time
+  const formatRecordingTime = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
   // ---- helper: normalize server messages into the UI shape RightPanel expects
   const normalizeMessageFromServer = (m) => {
     if (!m) return null;
@@ -133,6 +392,35 @@ export default function MeetingPage() {
         try { disconnect(); } catch (_) {}
         window.location.href = "/";
       }
+      // Handle recording commands from any user
+      if (c.type === "record-toggle") {
+        if (c.enabled && !isRecording) {
+          setIsRecording(true);
+          setRecordingStartTime(c.startTime || Date.now());
+          setRecordingStartedBy(c.startedBy || "Someone");
+          // Show recording started message for all participants
+          const recordingMessage = {
+            type: "system",
+            text: `🔴 Recording started by ${c.startedBy || "a participant"}`,
+            time: Date.now(),
+            _localId: `recording-start-${Date.now()}`
+          };
+          setChatMessages(prev => [...prev, recordingMessage]);
+        } else if (!c.enabled && isRecording) {
+          setIsRecording(false);
+          const duration = c.duration || recordingTime;
+          setRecordingStartTime(null);
+          setRecordingStartedBy(null);
+          // Show recording stopped message for all participants
+          const recordingMessage = {
+            type: "system",
+            text: `⏹️ Recording stopped by ${c.stoppedBy || "a participant"}. Duration: ${formatRecordingTime(duration)}`,
+            time: Date.now(),
+            _localId: `recording-stop-${Date.now()}`
+          };
+          setChatMessages(prev => [...prev, recordingMessage]);
+        }
+      }
     });
 
     // normalize incoming chat messages from server
@@ -144,7 +432,7 @@ export default function MeetingPage() {
     });
 
     return () => { offAssign(); offParts(); offHost(); offChat(); };
-  }, [on, mySocketId]);
+  }, [on, mySocketId, isRecording, recordingTime]);
 
   /* ---------- auto start camera & join ---------- */
   useEffect(() => {
@@ -325,6 +613,13 @@ export default function MeetingPage() {
         onEndMeeting={handleEndMeeting}
         camOn={camOn}
         micOn={micOn}
+        // UPDATED: Recording props with real functionality
+        onStartRecording={handleStartRecording}
+        onStopRecording={handleStopRecording}
+        isRecording={isRecording}
+        recordingTime={recordingTime}
+        recordedUrl={lastRecordingUrl || recordedUrl}
+        onDownloadRecording={handleDownloadRecording}
       />
 
       <div className="meeting-body">
@@ -355,7 +650,14 @@ export default function MeetingPage() {
             isHost={isHost}
             onMuteAll={hostMuteAll}
             onKick={hostKick}
-            onToggleRecord={(enabled) => sendHostCommand && sendHostCommand(roomId, { type: "record-toggle", enabled })}
+            onToggleRecord={(enabled) => {
+              // ALL USERS can toggle recording
+              if (enabled) {
+                handleStartRecording();
+              } else {
+                handleStopRecording();
+              }
+            }}
             onToggleLiveCC={(enabled) => sendHostCommand && sendHostCommand(roomId, { type: "livecc-toggle", enabled })}
             startLocalMedia={startLocalMedia}
 
@@ -363,6 +665,12 @@ export default function MeetingPage() {
             meetingStartAt={meetingStartAt}
             roomId={roomId}
             hostName={hostName}
+            /* NEW props for recordings */
+            recordedUrl={lastRecordingUrl || recordedUrl}
+            isRecording={isRecording}
+            recordingTime={recordingTime}
+            onDownloadRecording={handleDownloadRecording}
+            formatRecordingTime={formatRecordingTime}
           />
         </div>
       </div>

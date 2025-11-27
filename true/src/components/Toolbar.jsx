@@ -11,6 +11,8 @@ import {
   IconMore,
   IconLeave,
   IconEnd,
+  IconRecord,
+  IconStop,
 } from "./icons";
 
 export default function Toolbar({
@@ -28,14 +30,26 @@ export default function Toolbar({
   isHost = false,
   hostLocked = false,
   onEndMeeting = null,
-  // NEW: real device state (provided by MeetingPage)
   camOn = true,
   micOn = true,
+  // NEW: Recording props
+  onStartRecording = () => {},
+  onStopRecording = () => {},
+  isRecording = false,
+  recordingTime = 0, // in seconds
 }) {
   const [reactOpen, setReactOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [endModalOpen, setEndModalOpen] = useState(false);
+  
+  // Format recording time (HH:MM:SS)
+  const formatRecordingTime = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
 
   const meetingUrl = `${window.location.origin}/meet/${roomId}?name=${encodeURIComponent(name)}`;
 
@@ -64,6 +78,15 @@ export default function Toolbar({
     } catch (e) {}
   };
 
+  const handleRecordingToggle = () => {
+    if (isRecording) {
+      onStopRecording && onStopRecording();
+    } else {
+      onStartRecording && onStartRecording();
+    }
+    setMoreOpen(false);
+  };
+
   return (
     <>
       <div className="premium-toolbar toolbar-bar" style={{ position: "sticky", top: 0, zIndex: 1000 }}>
@@ -81,6 +104,20 @@ export default function Toolbar({
             <button className="icon-text-btn" onClick={() => setInviteOpen(true)} title="Share link">
               Share link
             </button>
+
+            {/* Recording indicator - only show when recording */}
+            {isRecording && (
+              <div className="recording-indicator">
+                <div className="recording-dot"></div>
+                <span style={{ 
+                  color: '#ff3b30', 
+                  fontSize: '13px', 
+                  fontWeight: '600' 
+                }}>
+                  REC {formatRecordingTime(recordingTime)}
+                </span>
+              </div>
+            )}
 
             <nav className="toolbar-nav">
               <button className="toolbar-item" onClick={() => togglePanel("chat")} title="Chat">
@@ -151,6 +188,24 @@ export default function Toolbar({
 
             {moreOpen && (
               <div className="more-popup" role="menu" onMouseLeave={() => setMoreOpen(false)}>
+                {/* Recording control - AVAILABLE TO ALL USERS */}
+                <button 
+                  className={`host-action ${isRecording ? 'danger' : ''}`} 
+                  onClick={handleRecordingToggle}
+                >
+                  {isRecording ? (
+                    <>
+                      <IconStop size={16} />
+                      Stop Recording ({formatRecordingTime(recordingTime)})
+                    </>
+                  ) : (
+                    <>
+                      <IconRecord size={16} />
+                      Start Recording
+                    </>
+                  )}
+                </button>
+
                 <button className="host-action" onClick={() => { setMoreOpen(false); alert("Meeting info"); }}>
                   Meeting info
                 </button>
