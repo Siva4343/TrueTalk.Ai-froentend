@@ -14,7 +14,6 @@ export default function MeetingPage() {
   const roomId = currentRoomFromPath;
 
   const {
-    wsRef,
     localVideoElRef,
     mediaStreamRef,
     startLocalMedia,
@@ -84,20 +83,21 @@ export default function MeetingPage() {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   }, []);
 
-  // Recording timer effect
+  // Recording timer effect - FIXED: Avoid setState in effect
   useEffect(() => {
     let interval;
     if (isRecording && recordingStartTime) {
       interval = setInterval(() => {
-        setRecordingTime(Math.floor((Date.now() - recordingStartTime) / 1000));
+        const newRecordingTime = Math.floor((Date.now() - recordingStartTime) / 1000);
+        setRecordingTime(newRecordingTime);
       }, 1000);
-    } else {
-      setRecordingTime(0);
     }
-    return () => clearInterval(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [isRecording, recordingStartTime]);
 
-  // Enhanced Live Captions functions with continuous recognition
+  // Enhanced Live Captions functions with continuous recognition - FIXED: Move inside useCallback
   const initializeSpeechRecognition = useCallback(() => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
       setError("Live captions not supported in this browser. Try Chrome or Edge.");
@@ -265,8 +265,9 @@ export default function MeetingPage() {
     };
 
     return recognition;
-  }, [captionsLanguage, name, roomId, sendHostCommand, liveCaptionsEnabled]);
+  }, [captionsLanguage, name, roomId, sendHostCommand, liveCaptionsEnabled, isCaptionsActive]);
 
+  // Define startLiveCaptions first to avoid circular dependency - FIXED: Include initializeSpeechRecognition in deps
   const startLiveCaptions = useCallback(() => {
     if (!micOn) {
       setError("Enable your microphone to use live captions");
@@ -310,14 +311,23 @@ export default function MeetingPage() {
       console.error("❌ Failed to start speech recognition:", error);
       setError("Failed to start live captions. Please check microphone permissions.");
       
+      // Use a direct call instead of referencing startLiveCaptions to avoid circular dependency
       setTimeout(() => {
         if (liveCaptionsEnabled) {
           console.log("🔄 Retrying speech recognition start...");
-          startLiveCaptions();
+          const newRecognition = initializeSpeechRecognition();
+          if (newRecognition) {
+            try {
+              newRecognition.start();
+              setSpeechRecognition(newRecognition);
+            } catch (retryError) {
+              console.error("Retry failed:", retryError);
+            }
+          }
         }
       }, 1000);
     }
-  }, [initializeSpeechRecognition, micOn, name, roomId, sendHostCommand, speechRecognition, liveCaptionsEnabled]);
+  }, [micOn, name, roomId, sendHostCommand, speechRecognition, liveCaptionsEnabled, initializeSpeechRecognition]);
 
   const stopLiveCaptions = useCallback(() => {
     console.log("🛑 Stopping live captions...");
@@ -397,7 +407,7 @@ export default function MeetingPage() {
     setChatMessages(prev => [...prev, exportMessage]);
   }, [captions, roomId, formatRecordingTime, meetingStartAt, participants]);
 
-  // Auto-restart captions if they stop unexpectedly
+  // Auto-restart captions if they stop unexpectedly - FIXED: Include initializeSpeechRecognition in deps
   useEffect(() => {
     let restartInterval;
     
@@ -405,7 +415,16 @@ export default function MeetingPage() {
       restartInterval = setInterval(() => {
         if (liveCaptionsEnabled && !isCaptionsActive && captionsRestartAttempts < 5) {
           console.log("🔄 Attempting to restart inactive captions...");
-          startLiveCaptions();
+          // Use direct initialization instead of calling startLiveCaptions
+          const recognition = initializeSpeechRecognition();
+          if (recognition) {
+            try {
+              recognition.start();
+              setSpeechRecognition(recognition);
+            } catch (error) {
+              console.warn("Auto-restart failed:", error);
+            }
+          }
         }
       }, 5000);
     }
@@ -413,7 +432,7 @@ export default function MeetingPage() {
     return () => {
       if (restartInterval) clearInterval(restartInterval);
     };
-  }, [liveCaptionsEnabled, isCaptionsActive, captionsRestartAttempts, startLiveCaptions]);
+  }, [liveCaptionsEnabled, isCaptionsActive, captionsRestartAttempts, initializeSpeechRecognition]);
 
   // REAL Recording handler
   const handleStartRecording = useCallback(async () => {

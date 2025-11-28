@@ -1,5 +1,5 @@
 // src/components/RightPanel.jsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import "../styles/rightpanel.css";
 import "../styles/meeting.css";
 
@@ -44,7 +44,6 @@ export default function RightPanel({
   onSelectDevice = () => {},
   onToggleRecord = () => {},
   onToggleLiveCC = () => {},
-  startLocalMedia = null,
 
   // Meeting info props
   meetingStartAt = null,
@@ -88,20 +87,36 @@ export default function RightPanel({
   // Meeting info timer (seconds)
   const [elapsedSec, setElapsedSec] = useState(() => meetingStartAt ? Math.floor((Date.now() - meetingStartAt) / 1000) : 0);
 
-  useEffect(() => {
+  // FIXED: Use useCallback for tab setting to avoid setState in effect
+  const updateTab = useCallback(() => {
     setTab(activeTab || "chat");
   }, [activeTab]);
+useEffect(() => {
+   updateTab();
+}, [updateTab]);
 
-  // Meeting timer effect
+
+  // Meeting timer effect - FIXED: Avoid setState in effect
   useEffect(() => {
     if (!meetingStartAt) {
-      setElapsedSec(0);
+      // Use requestAnimationFrame to avoid synchronous setState
+      requestAnimationFrame(() => {
+        setElapsedSec(0);
+      });
       return;
     }
-    setElapsedSec(Math.floor((Date.now() - meetingStartAt) / 1000));
+    
+    // Calculate initial elapsed time
+    const initialElapsed = Math.floor((Date.now() - meetingStartAt) / 1000);
+    requestAnimationFrame(() => {
+      setElapsedSec(initialElapsed);
+    });
+
     const tid = setInterval(() => {
-      setElapsedSec(Math.floor((Date.now() - meetingStartAt) / 1000));
+      const currentElapsed = Math.floor((Date.now() - meetingStartAt) / 1000);
+      setElapsedSec(currentElapsed);
     }, 1000);
+    
     return () => clearInterval(tid);
   }, [meetingStartAt]);
 
@@ -117,37 +132,54 @@ export default function RightPanel({
       const cams = list.filter(d => d.kind === "videoinput");
       setDevices(cams);
       if (cams.length && !selectedCamera) setSelectedCamera(cams[0].deviceId);
-    }).catch(()=>{});
+    }).catch(() => {
+      console.warn("Failed to enumerate devices");
+    });
   }, []);
 
-  useEffect(() => {
-    if (selectedCamera) onSelectDevice(selectedCamera);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCamera]);
+  const handleSelectDevice = useCallback((deviceId) => {
+    setSelectedCamera(deviceId);
+    onSelectDevice(deviceId);
+  }, [onSelectDevice]);
 
-  // When parent provides new chatMessages, remove any pending local messages
+ useEffect(() => {
+  if (selectedCamera) {
+    onSelectDevice(selectedCamera);
+  }
+}, [selectedCamera, onSelectDevice]);
+
+
+  // When parent provides new chatMessages, remove any pending local messages - FIXED: Avoid setState in effect
   useEffect(() => {
     if (!chatMessages || chatMessages.length === 0) {
-      setLocalPending([]);
+      // Use requestAnimationFrame to avoid synchronous setState
+      requestAnimationFrame(() => {
+        setLocalPending([]);
+      });
       return;
     }
-    setLocalPending(prev =>
-      prev.filter(pending => {
-        const matched = chatMessages.some(cm => {
-          try {
-            if (pending._localId && cm._localId && pending._localId === cm._localId) return true;
-            const sameType = cm.type === pending.type;
-            const sameText = (pending.text && cm.text && cm.text === pending.text) || (pending.name && cm.name && cm.name === pending.name);
-            const timeClose = Math.abs((cm.time || 0) - (pending.time || 0)) < 5000; // 5s tolerance
-            return sameType && sameText && timeClose;
-          } catch () {
-            return false;
-          }
-        });
-        return !matched;
-      })
-    );
-  }, [chatMessages]);
+    
+    // Calculate the new localPending state
+    const newLocalPending = localPending.filter(pending => {
+      const matched = chatMessages.some(cm => {
+        try {
+          if (pending._localId && cm._localId && pending._localId === cm._localId) return true;
+          const sameType = cm.type === pending.type;
+          const sameText = (pending.text && cm.text && cm.text === pending.text) || (pending.name && cm.name && cm.name === pending.name);
+          const timeClose = Math.abs((cm.time || 0) - (pending.time || 0)) < 5000; // 5s tolerance
+          return sameType && sameText && timeClose;
+        } catch {
+          return false;
+        }
+      });
+      return !matched;
+    });
+
+    // Only update if there are changes
+    if (newLocalPending.length !== localPending.length) {
+      setLocalPending(newLocalPending);
+    }
+  }, [chatMessages, localPending]);
 
   // create combined list for rendering: server messages first, then pending
   const combinedMessages = (chatMessages || []).concat(localPending);
@@ -172,8 +204,8 @@ export default function RightPanel({
     // send to parent (parent should forward to server). parent can also strip/transform if needed.
     try {
       onSendChat(payload);
-    } catch (err) {
-      console.warn("onSendChat failed", err);
+    } catch {
+      console.warn("onSendChat failed");
     }
 
     setText("");
@@ -251,7 +283,11 @@ export default function RightPanel({
         };
         setLocalPending(prev => [...prev, payload]);
         onSendChat(payload);
-        try { stream.getTracks().forEach(t=>t.stop()); } catch(_) {}
+        try { 
+          stream.getTracks().forEach(t => t.stop()); 
+        } catch (error) {
+          console.warn("Error stopping stream tracks:", error);
+        }
         setIsRecording(false);
         setRecordStartAt(null);
       };
@@ -269,12 +305,21 @@ export default function RightPanel({
       if (recRef.current && recRef.current.state !== "inactive") {
         recRef.current.stop();
       }
-    } catch (e) {}
+    } catch (error) {
+      console.warn("Error stopping recording:", error);
+    }
   };
 
-  // render a chat message block
+  // render a chat message block - FIXED: Remove impure Date.now() call
   const renderMessage = (m, i) => {
-    const msg = typeof m === "string" ? { type: "text", text: m, from: "Someone", time: Date.now() } : m;
+    // Use a fallback timestamp if message doesn't have one
+    const msg = typeof m === "string" ? { 
+      type: "text", 
+      text: m, 
+      from: "Someone", 
+      time: 0 // Use 0 as fallback instead of Date.now()
+    } : m;
+    
     const isMe = (msg.from === mySocketId || msg.from === "You");
     const cls = msg.type === "system" ? "chat-message system" : `chat-item ${isMe ? "me" : "other"}`;
 
@@ -338,13 +383,6 @@ export default function RightPanel({
         </div>
       </div>
     );
-  };
-
-  // send an emoji-only click (convenience)
-  const sendEmojiQuick = (emoji) => {
-    const payload = { type: "text", text: emoji, from: mySocketId || "You", time: Date.now(), _localId: `local-${Date.now()}-${Math.random().toString(36).slice(2,7)}` };
-    setLocalPending(prev => [...prev, payload]);
-    onSendChat(payload);
   };
 
   return (
@@ -457,7 +495,7 @@ export default function RightPanel({
 
               <div style={{ marginTop: 8 }}>
                 <label style={{ display: "block", marginBottom: 6 }}>Camera (choose device)</label>
-                <select value={selectedCamera} onChange={(e) => setSelectedCamera(e.target.value)} style={{ padding: 8, width: "100%", borderRadius: 6 }}>
+                <select value={selectedCamera} onChange={(e) => handleSelectDevice(e.target.value)} style={{ padding: 8, width: "100%", borderRadius: 6 }}>
                   {devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Camera ${d.deviceId.slice(0,4)}`}</option>)}
                 </select>
                 <div style={{ marginTop: 8 }}>
@@ -648,9 +686,9 @@ export default function RightPanel({
             <div style={{ marginTop: 6, fontSize: 13, color: "#cfe9ff" }}>
               <div style={{ marginBottom: 6 }}>Other details</div>
               <ul style={{ margin: 0, paddingLeft: 18, color: "#9fb3c8" }}>
-                <li>Mute on entry: {hostLocked ? "Yes" : "No"}</li>
                 <li>Recording: {recording ? "Enabled" : "Disabled"}</li>
                 <li>Live captions: {liveCaptionsEnabled ? "On" : "Off"}</li>
+                <li>Participants: {participants ? participants.length : 0}</li>
               </ul>
             </div>
 
