@@ -283,3 +283,60 @@
     .tool-label { display:none; } /* hide text on small screens for compact toolbar */
     .icon-text-btn { display:none; }
   }
+/* ---------- Live caption styles (append to meeting.css) ---------- */
+
+/* Live caption bar (center bottom) */
+.live-caption-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 20px;
+  z-index: 5000;
+  max-width: calc(100% - 40px);
+  pointer-events: none; /* don't block clicks */
+  display: flex;
+  justify-content: center;
+}
+
+.live-caption-inner {
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 999px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+  font-size: 16px;
+  line-height: 1.2;
+  max-width: 1200px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* each line inside the pill */
+.live-caption-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+/* speaker label */
+.live-caption-speaker {
+  font-weight: 700;
+  opacity: 0.95;
+  margin-right: 6px;
+  color: #e6f7ff;
+}
+
+/* caption text */
+.live-caption-text {
+  font-weight: 500;
+  opacity: 0.98;
+}
+
+/* small-screen tweaks */
+@media (max-width: 640px) {
+  .live-caption-inner { font-size: 14px; padding: 8px 12px; }
+}

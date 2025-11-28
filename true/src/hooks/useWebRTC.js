@@ -5,10 +5,10 @@ const DEFAULT_STUN = [{ urls: "stun:stun.l.google.com:19302" }];
 
 export default function useWebRTC(signalingUrl = null) {
   const wsRef = useRef(null);
-  const localVideoElRef = useRef(null);
-  const mediaStreamRef = useRef(null);
-  const peersRef = useRef(new Map());
-  const [remoteStreams, setRemoteStreams] = useState([]);
+  const localVideoElRef = useRef(null); // DOM Video element for the local preview
+  const mediaStreamRef = useRef(null);  // MediaStream
+  const peersRef = useRef(new Map());   // peerId -> { pc, stream, candidatesQueue, name, muted }
+  const [remoteStreams, setRemoteStreams] = useState([]); // [{ socketId, stream, name, muted }]
   const [participants, setParticipants] = useState([]);
   const handlersRef = useRef(new Map());
   const myIdRef = useRef(null);
@@ -17,9 +17,7 @@ export default function useWebRTC(signalingUrl = null) {
 
   function emit(ev, payload) {
     const list = handlersRef.current.get(ev) || [];
-    list.forEach((fn) => {
-      try { fn(payload); } catch (e) {}
-    });
+    for (const cb of list) try { cb(payload); } catch (e) {}
   }
 
   const on = useCallback((ev, cb) => {
@@ -27,7 +25,7 @@ export default function useWebRTC(signalingUrl = null) {
     handlersRef.current.get(ev).push(cb);
     return () => {
       const arr = handlersRef.current.get(ev) || [];
-      handlersRef.current.set(ev, arr.filter((f) => f !== cb));
+      handlersRef.current.set(ev, arr.filter(f => f !== cb));
     };
   }, []);
 
@@ -45,209 +43,180 @@ export default function useWebRTC(signalingUrl = null) {
       }
     }
     setRemoteStreams(arr);
+    emit("remote-streams", arr);
   }
 
   function createPeerConnection(remoteId, opts = {}) {
     if (peersRef.current.has(remoteId)) return peersRef.current.get(remoteId);
 
     const pc = new RTCPeerConnection({ iceServers: DEFAULT_STUN });
-    const info = { pc, stream: null, candidatesQueue: [], name: opts.name, muted: false, isHost: !!opts.isHost };
+    const info = { pc, stream: null, candidatesQueue: [], name: opts.name || null, muted: false, isHost: !!opts.isHost };
 
-    let dc = null;
     const remoteStream = new MediaStream();
     pc.ontrack = (ev) => {
       try {
-        ev.streams && ev.streams.length && ev.streams.forEach(s => s.getTracks().forEach(t => remoteStream.addTrack(t)));
-      } catch (e) {}
+        // prefer ev.streams
+        if (ev.streams && ev.streams.length) {
+          ev.streams.forEach(s => s.getTracks().forEach(t => remoteStream.addTrack(t)));
+        } else if (ev.track) {
+          remoteStream.addTrack(ev.track);
+        }
+      } catch (e) { /* swallow */ }
       info.stream = remoteStream;
       peersRef.current.set(remoteId, info);
       refreshRemoteStreams();
     };
 
     pc.onicecandidate = (evt) => {
-      if (!evt.candidate) return;
-      sendSignal(remoteId, { type: "candidate", candidate: evt.candidate });
+      if (evt.candidate) {
+        // send candidate using the signaling format used by the backend
+        sendSignal(remoteId, { type: "candidate", candidate: evt.candidate });
+      }
     };
 
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "closed" || pc.connectionState === "disconnected") {
+      if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         setTimeout(() => {
-          try { pc.close(); } catch (_) {}
+          try { pc.close(); } catch(_) {}
           peersRef.current.delete(remoteId);
           refreshRemoteStreams();
         }, 600);
       }
     };
 
-    info.pc = pc;
-    info.dc = dc;
     peersRef.current.set(remoteId, info);
     return info;
   }
 
   function sendRaw(obj) {
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(obj));
-    }
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    } catch (e) { console.warn("sendRaw failed", e); }
   }
 
   function sendSignal(to, signal) {
-    const payload = { type: "signal", to, from: myIdRef.current, signal };
-    sendRaw(payload);
+    sendRaw({ type: "signal", to, from: myIdRef.current, signal });
   }
 
   async function makeOffer(remoteId) {
     const info = createPeerConnection(remoteId);
     const pc = info.pc;
     if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => pc.addTrack(t, mediaStreamRef.current));
+      try { mediaStreamRef.current.getTracks().forEach(t => pc.addTrack(t, mediaStreamRef.current)); } catch(_) {}
     }
-
     try {
-      if (!info.dc) {
-        info.dc = pc.createDataChannel("chat");
-        info.dc.onopen = () => {};
-        info.dc.onmessage = () => {};
-      }
-    } catch (e) {}
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    sendSignal(remoteId, { type: "offer", sdp: pc.localDescription });
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sendSignal(remoteId, { type: "offer", sdp: pc.localDescription });
+    } catch (e) { console.warn("makeOffer failed", e); }
   }
 
   async function handleOffer(from, sdp) {
     const info = createPeerConnection(from);
     const pc = info.pc;
     if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => pc.addTrack(t, mediaStreamRef.current));
+      try { mediaStreamRef.current.getTracks().forEach(t => pc.addTrack(t, mediaStreamRef.current)); } catch(_) {}
     }
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       sendSignal(from, { type: "answer", sdp: pc.localDescription });
-
       if (info.candidatesQueue && info.candidatesQueue.length) {
-        info.candidatesQueue.forEach(c => {
-          try { pc.addIceCandidate(c).catch(()=>{}); } catch(_) {}
-        });
+        for (const c of info.candidatesQueue) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(_) {}
+        }
         info.candidatesQueue = [];
       }
-    } catch (e) {
-      console.warn("handleOffer error", e);
-    }
+    } catch (e) { console.warn("handleOffer error", e); }
   }
 
   async function handleAnswer(from, sdp) {
     const info = peersRef.current.get(from);
     if (!info) return;
-    try {
-      await info.pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    } catch (e) {
-      console.warn("handleAnswer error", e);
-    }
+    try { await info.pc.setRemoteDescription(new RTCSessionDescription(sdp)); } catch (e) { console.warn("handleAnswer error", e); }
   }
 
   async function handleCandidate(from, cand) {
     const info = peersRef.current.get(from);
     if (!info) return;
     try {
-      if (info.pc && info.pc.remoteDescription) {
+      if (info.pc && info.pc.remoteDescription && info.pc.remoteDescription.type) {
         await info.pc.addIceCandidate(new RTCIceCandidate(cand));
       } else {
         info.candidatesQueue = info.candidatesQueue || [];
         info.candidatesQueue.push(cand);
       }
-    } catch (e) {
-      console.warn("candidate add failed", e);
-    }
+    } catch (e) { console.warn("candidate add failed", e); }
   }
 
-// REPLACE the existing startLocalMedia with this block:
-async function startLocalMedia(opts = { video: true, audio: true, deviceId: null, resolution: "auto" }) {
-  try {
-    const res = (opts.resolution || "auto").toString().toLowerCase();
-    let videoConstraint = false;
+  // startLocalMedia - robust constraints & fallback
+  async function startLocalMedia(opts = { video: true, audio: true, deviceId: null, resolution: "auto" }) {
+    try {
+      const res = (opts.resolution || "auto").toString().toLowerCase();
+      let videoConstraint = false;
 
-    if (opts.video) {
-      if (res === "4k") {
-        videoConstraint = {
-          width: { ideal: 3840 },
-          height: { ideal: 2160 },
-          frameRate: { ideal: 30, max: 60 },
-        };
-      } else if (res === "1080p" || res === "1080") {
-        videoConstraint = {
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 30 },
-        };
-      } else if (res === "720p" || res === "720") {
-        videoConstraint = {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 },
-        };
-      } else {
-        videoConstraint = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
+      if (opts.video) {
+        if (res === "4k") videoConstraint = { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } };
+        else if (res === "1080p") videoConstraint = { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } };
+        else if (res === "720p") videoConstraint = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
+        else videoConstraint = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
+
+        if (opts.deviceId) videoConstraint.deviceId = { exact: opts.deviceId };
       }
 
-      if (opts.deviceId) {
-        videoConstraint.deviceId = { exact: opts.deviceId };
-      }
-    }
+      const constraints = { audio: !!opts.audio, video: videoConstraint };
 
-    const constraints = { audio: !!opts.audio, video: videoConstraint };
+      const tryGet = async (c) => {
+        try { return await navigator.mediaDevices.getUserMedia(c); } catch (err) { return null; }
+      };
 
-    // Try requested constraints, then progressively fallback if rejected
-    const tryGet = async (c) => {
-      try {
-        return await navigator.mediaDevices.getUserMedia(c);
-      } catch (err) {
-        return null;
-      }
-    };
+      let s = await tryGet(constraints);
 
-    let s = await tryGet(constraints);
-
-    // fallback chain
-    if (!s) {
-      if (res === "4k") {
-        s = await tryGet({ audio: !!opts.audio, video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 }, deviceId: opts.deviceId ? { exact: opts.deviceId } : undefined } });
-      }
-      if (!s && (res === "4k" || res === "1080p" || res === "1080")) {
-        s = await tryGet({ audio: !!opts.audio, video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, deviceId: opts.deviceId ? { exact: opts.deviceId } : undefined } });
-      }
       if (!s) {
-        // final fallback: let browser pick anything available
+        // fallback attempts
         s = await tryGet({ audio: !!opts.audio, video: !!opts.video });
       }
-    }
 
-    if (!s) throw new Error("Could not obtain media stream");
+      if (!s) throw new Error("Could not obtain media");
 
-    mediaStreamRef.current = s;
+      mediaStreamRef.current = s;
 
-    if (localVideoElRef.current) {
-      try {
-        localVideoElRef.current.srcObject = s;
-        localVideoElRef.current.muted = true;
-        localVideoElRef.current.play && localVideoElRef.current.play().catch(()=>{});
-      } catch (e) {}
-    }
+      // setup local video element if present
+      if (localVideoElRef.current) {
+        try {
+          localVideoElRef.current.srcObject = s;
+          localVideoElRef.current.muted = true;
+          localVideoElRef.current.play && localVideoElRef.current.play().catch(()=>{});
+        } catch (e) {}
+      }
 
-    // notify UI that local media changed
-    emit("local-media-updated", mediaStreamRef.current);
+      // add tracks to existing peer connections (senders)
+      for (const [id, info] of peersRef.current.entries()) {
+        try {
+          const pc = info.pc;
+          const senders = pc.getSenders();
+          const videoTrack = s.getVideoTracks()[0];
+          const audioTrack = s.getAudioTracks()[0];
+          // replace or add
+          if (videoTrack) {
+            const sender = senders.find(x => x.track && x.track.kind === "video");
+            if (sender) await sender.replaceTrack(videoTrack);
+            else pc.addTrack(videoTrack, s);
+          }
+          if (audioTrack) {
+            const senderA = senders.find(x => x.track && x.track.kind === "audio");
+            if (senderA) await senderA.replaceTrack(audioTrack);
+            else pc.addTrack(audioTrack, s);
+          }
+        } catch (e) { console.warn("add/repl tracks failed", e); }
+      }
 
-    return s;
-  } catch (e) {
-    console.warn("startLocalMedia failed", e);
-    throw e;
+      emit("local-media-updated", mediaStreamRef.current);
+      return s;
+    } catch (e) { console.warn("startLocalMedia failed", e); throw e; }
   }
-}
-
 
   function toggleCam() {
     try {
@@ -278,10 +247,7 @@ async function startLocalMedia(opts = { video: true, audio: true, deviceId: null
       if (!newTrack) return;
       const ms = mediaStreamRef.current;
       const oldTrack = ms.getVideoTracks()[0];
-      if (oldTrack) {
-        ms.removeTrack(oldTrack);
-        oldTrack.stop && oldTrack.stop();
-      }
+      if (oldTrack) { ms.removeTrack(oldTrack); oldTrack.stop && oldTrack.stop(); }
       ms.addTrack(newTrack);
 
       for (const [, info] of peersRef.current.entries()) {
@@ -323,33 +289,27 @@ async function startLocalMedia(opts = { video: true, audio: true, deviceId: null
 
   async function stopScreenShare() {
     try {
-      if (!mediaStreamRef.current) return;
+      // re-acquire camera
       const cam = await startLocalMedia({ video: true, audio: true }).catch(()=>null);
       if (!cam) return;
-      const newTrack = mediaStreamRef.current.getVideoTracks()[0];
-      for (const [, info] of peersRef.current.entries()) {
-        try {
-          const sender = info.pc.getSenders().find(s => s.track && s.track.kind === "video");
-          if (sender) await sender.replaceTrack(newTrack);
-        } catch (e) {}
-      }
+      // newly acquired local tracks replaced to peers in startLocalMedia
       emit("local-media-updated", mediaStreamRef.current);
     } catch (e) { console.warn(e); }
   }
 
   function sendChatMessage(roomId, payload) {
-    sendRaw({ type: "chat-message", roomId, payload });
+    sendRaw({ type: "chat-message", payload, roomId });
   }
 
   function sendHostCommand(roomId, payload) {
-    sendRaw({ type: "host-command", roomId, payload });
+    sendRaw({ type: "host-command", payload, roomId });
   }
 
   async function connect({ roomId, name } = {}) {
     const url = signalingUrl || (() => {
       const loc = window.location;
       const proto = loc.protocol === "https:" ? "wss" : "ws";
-      return `${proto}://${loc.host}/ws`;
+      return `${proto}://${loc.host}/ws/meet/${roomId}/`;
     })();
 
     if (!(wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) {
@@ -358,44 +318,84 @@ async function startLocalMedia(opts = { video: true, audio: true, deviceId: null
 
     roomRef.current = roomId || roomRef.current;
     nameRef.current = name || nameRef.current;
+
     const ws = wsRef.current;
 
+    // IMPORTANT: backend expects an "introduce" message with payload { name, roomId }
     ws.onopen = () => {
-      sendRaw({ type: "join", roomId: roomRef.current, name: nameRef.current });
+      try {
+        sendRaw({ type: "introduce", payload: { name: nameRef.current, roomId: roomRef.current } });
+      } catch (e) {
+        console.warn("introduce send failed", e);
+      }
+      emit("ws-open");
     };
 
     ws.onmessage = async (ev) => {
       try {
-        const msg = JSON.parse(ev.data);
+        const msg = JSON.parse(ev.data || "{}");
+        const payload = msg.payload || {};
+
+        // assign-id (backend sends payload.id)
         if (msg.type === "assign-id") {
-          myIdRef.current = msg.id;
-          emit("assign-id", { id: msg.id });
-        } else if (msg.type === "participants") {
-          setParticipants(msg.list || []);
-          emit("participants", msg.list || []);
-          for (const p of (msg.list || [])) {
-            if (p.socketId === myIdRef.current) continue;
-            if (!peersRef.current.has(p.socketId)) {
-              setTimeout(() => { try { makeOffer(p.socketId); } catch (e) {} }, 300 + Math.random() * 200);
+          const id = payload.id || msg.id || null;
+          myIdRef.current = id;
+          emit("assign-id", { id });
+          return;
+        }
+
+        // participants list broadcast
+        if (msg.type === "participants") {
+          const list = msg.participants || payload.participants || msg.list || [];
+          setParticipants(list);
+          emit("participants", list);
+
+          // create offers to new peers if needed
+          for (const p of (list || [])) {
+            const pid = p.socketId || p.id || p.clientId;
+            if (!pid || pid === myIdRef.current) continue;
+            if (!peersRef.current.has(pid)) {
+              setTimeout(() => makeOffer(pid), 250 + Math.random() * 300);
             }
           }
-        } else if (msg.type === "signal") {
-          const { from, signal } = msg;
-          if (!from || !signal) return;
-          if (signal.type === "offer") {
-            await handleOffer(from, signal.sdp);
-          } else if (signal.type === "answer") {
-            await handleAnswer(from, signal.sdp);
-          } else if (signal.type === "candidate") {
-            await handleCandidate(from, signal.candidate || signal.cand || signal);
-          }
-        } else if (msg.type === "chat-message") {
-          emit("chat-message", msg.payload);
-        } else if (msg.type === "host-command") {
-          emit("host-command", msg.payload);
-        } else {
-          emit(msg.type, msg);
+          return;
         }
+
+        // signal messages (server may wrap under type 'signal' or send direct offers/answers)
+        if (msg.type === "signal" || (msg.type === "signal-message")) {
+          const from = msg.from || payload.from;
+          const signal = msg.signal || payload.signal || payload;
+          if (!from || !signal) return;
+          if (signal.type === "offer") await handleOffer(from, signal.sdp || signal);
+          else if (signal.type === "answer") await handleAnswer(from, signal.sdp || signal);
+          else if (signal.type === "candidate") await handleCandidate(from, signal.candidate || signal.cand || signal);
+          return;
+        }
+
+        // Some backends may forward offers/answers/candidates under explicit types - handle those too:
+        if (msg.type === "offer" || msg.type === "answer" || msg.type === "ice-candidate" || msg.type === "candidate") {
+          const from = msg.from || payload.from;
+          const sig = payload || msg;
+          if (msg.type === "offer") await handleOffer(from, sig.sdp || sig);
+          else if (msg.type === "answer") await handleAnswer(from, sig.sdp || sig);
+          else if (msg.type === "ice-candidate" || msg.type === "candidate") await handleCandidate(from, sig.candidate || sig.cand || sig);
+          return;
+        }
+
+        // chat-message (including caption payloads)
+        if (msg.type === "chat-message") {
+          emit("chat-message", payload || msg.payload || {});
+          return;
+        }
+
+        // host-command, reaction etc
+        if (msg.type === "host-command") {
+          emit("host-command", payload || msg.payload || {});
+          return;
+        }
+
+        // fallback: emit the message type with payload
+        emit(msg.type, payload || msg);
       } catch (e) {
         console.warn("ws onmessage parse", e);
       }
@@ -407,6 +407,7 @@ async function startLocalMedia(opts = { video: true, audio: true, deviceId: null
         peersRef.current.delete(id);
       }
       setRemoteStreams([]);
+      setParticipants([]);
       emit("ws-closed");
     };
 
@@ -431,6 +432,12 @@ async function startLocalMedia(opts = { video: true, audio: true, deviceId: null
     myIdRef.current = null;
     roomRef.current = null;
   }
+
+  // whenever peers change or streams change, refresh
+  useEffect(() => {
+    refreshRemoteStreams();
+    // eslint-disable-next-line
+  }, []);
 
   return {
     wsRef,

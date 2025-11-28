@@ -1,5 +1,4 @@
-// src/components/Toolbar.jsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   IconChat,
   IconPeople,
@@ -13,13 +12,36 @@ import {
   IconEnd,
 } from "./icons";
 
+const LANGS = [
+  { code: "en-US", label: "English (US)" },
+  { code: "en-GB", label: "English (UK)" },
+  { code: "en-IN", label: "English (India)" },
+
+  // Indian languages (10)
+  { code: "hi-IN", label: "Hindi (हिंदी)" },
+  { code: "te-IN", label: "Telugu (తెలుగు)" },
+  { code: "ta-IN", label: "Tamil (தமிழ்)" },
+  { code: "kn-IN", label: "Kannada (ಕನ್ನಡ)" },
+  { code: "ml-IN", label: "Malayalam (മലയാളം)" },
+  { code: "mr-IN", label: "Marathi (मराठी)" },
+  { code: "gu-IN", label: "Gujarati (ગુજરાતી)" },
+  { code: "bn-IN", label: "Bengali (বাংলা)" },
+  { code: "pa-IN", label: "Punjabi (ਪੰਜਾਬੀ)" },
+  { code: "or-IN", label: "Odia (ଓଡ଼ିଆ)" },
+
+  { code: "es-ES", label: "Spanish" },
+  { code: "fr-FR", label: "French" },
+  { code: "de-DE", label: "German" },
+];
+
 export default function Toolbar({
   roomId = "",
   name = "Guest",
   onOpenPanel = () => {},
   onToggleCam = () => {},
   onToggleMic = () => {},
-  onShare = () => {},
+  onShareLink = () => {},
+  onScreenShare = () => {},
   onLeave = () => {},
   onRaise = () => {},
   onReact = () => {},
@@ -28,14 +50,27 @@ export default function Toolbar({
   isHost = false,
   hostLocked = false,
   onEndMeeting = null,
-  // NEW: real device state (provided by MeetingPage)
   camOn = true,
   micOn = true,
+
+  // NEW props for Live CC + Recording
+  liveCcEnabled = false,
+  onToggleLiveCc = () => {},
+  liveCcLang = "en-US",
+  onChangeLiveCcLang = () => {},
+  recording = false,
+  onToggleRecord = () => {},
+  recordingTime = 0, // seconds
 }) {
   const [reactOpen, setReactOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [inviteOpen, setInviteOpen] = useState(false);
   const [endModalOpen, setEndModalOpen] = useState(false);
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") { setMoreOpen(false); setReactOpen(false); } }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const meetingUrl = `${window.location.origin}/meet/${roomId}?name=${encodeURIComponent(name)}`;
 
@@ -49,19 +84,14 @@ export default function Toolbar({
   };
 
   const togglePanel = (panel) => {
-    onOpenPanel((prev) => (prev === panel ? null : panel));
+    if (typeof onOpenPanel === "function") onOpenPanel((prev) => (prev === panel ? null : panel));
   };
 
-  const handleCamClick = () => {
-    try {
-      if (typeof onToggleCam === "function") onToggleCam();
-    } catch (e) {}
-  };
-
-  const handleMicClick = () => {
-    try {
-      if (typeof onToggleMic === "function") onToggleMic();
-    } catch (e) {}
+  const formatTime = (sec) => {
+    if (!sec || sec <= 0) return "00:00";
+    const s = Math.floor(sec % 60).toString().padStart(2, "0");
+    const m = Math.floor((sec / 60) % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
   };
 
   return (
@@ -74,13 +104,9 @@ export default function Toolbar({
           </div>
 
           <div className="toolbar-actions-left">
-            <button className="icon-text-btn" onClick={() => copy(meetingUrl)} title="Copy invite">
-              Copy invite
-            </button>
+            <button className="icon-text-btn" onClick={() => copy(meetingUrl)} title="Copy invite">Copy invite</button>
 
-            <button className="icon-text-btn" onClick={() => setInviteOpen(true)} title="Share link">
-              Share link
-            </button>
+            <button className="icon-text-btn" onClick={() => onShareLink && onShareLink()} title="Share link">Share link</button>
 
             <nav className="toolbar-nav">
               <button className="toolbar-item" onClick={() => togglePanel("chat")} title="Chat">
@@ -111,14 +137,9 @@ export default function Toolbar({
                       <button
                         key={e}
                         className="react-emoji"
-                        onClick={() => {
-                          onReact && onReact(e);
-                          setReactOpen(false);
-                        }}
+                        onClick={() => { onReact && onReact(e); setReactOpen(false); }}
                         aria-label={`React ${e}`}
-                      >
-                        {e}
-                      </button>
+                      >{e}</button>
                     ))}
                   </div>
                 )}
@@ -132,15 +153,15 @@ export default function Toolbar({
         </div>
 
         <div className="toolbar-right">
-          <button className={`tool-btn ${camOn ? "" : "off"}`} onClick={handleCamClick} title={camOn ? "Turn camera off" : "Turn camera on"}>
+          <button className={`tool-btn ${camOn ? "" : "off"}`} onClick={() => onToggleCam && onToggleCam()} title={camOn ? "Turn camera off" : "Turn camera on"}>
             <IconCam size={18} active={camOn} /> <span className="tool-label">Camera</span>
           </button>
 
-          <button className={`tool-btn ${micOn ? "" : "off"}`} onClick={handleMicClick} title={micOn ? "Mute" : "Unmute"}>
+          <button className={`tool-btn ${micOn ? "" : "off"}`} onClick={() => onToggleMic && onToggleMic()} title={micOn ? "Mute" : "Unmute"}>
             <IconMic size={18} muted={!micOn} /> <span className="tool-label">Mic</span>
           </button>
 
-          <button className="tool-btn" onClick={() => onShare && onShare()} title="Share screen">
+          <button className="tool-btn" onClick={() => onScreenShare && onScreenShare()} title="Share screen">
             <IconShare size={18} /> <span className="tool-label">Share</span>
           </button>
 
@@ -155,20 +176,51 @@ export default function Toolbar({
                   Meeting info
                 </button>
 
-                <button className="host-action" onClick={() => { setMoreOpen(false); onOpenPanel("settings"); }}>
+                <button className="host-action" onClick={() => { setMoreOpen(false); onOpenPanel && onOpenPanel("settings"); }}>
                   Settings
                 </button>
 
+                <div style={{ borderTop: "1px solid rgba(0,0,0,0.06)", marginTop: 8 }} />
+
+                {/* LIVE CAPTIONS */}
+                <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                  <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input type="checkbox" checked={liveCcEnabled} onChange={(e) => onToggleLiveCc && onToggleLiveCc(e.target.checked)} />
+                    <span>Live captions</span>
+                  </label>
+
+                  <div>
+                    <label style={{ fontSize: 12, color: "#444" }}>Language</label>
+                    <div>
+                      <select value={liveCcLang} onChange={(e) => onChangeLiveCcLang && onChangeLiveCcLang(e.target.value)} style={{ width: 220, padding: 6, borderRadius: 6 }}>
+                        {LANGS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ borderTop: "1px solid rgba(0,0,0,0.06)", marginTop: 8 }} />
+
+                {/* RECORDING */}
+                <div style={{ padding: 8, display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button
+                      className={`host-action ${recording ? "danger" : ""}`}
+                      onClick={() => { onToggleRecord && onToggleRecord(!recording); }}
+                    >
+                      {recording ? "Stop recording" : "Record meeting"}
+                    </button>
+
+                    {recording && <div style={{ fontSize: 13, color: "#333" }}>● {formatTime(recordingTime)}</div>}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#777" }}>Local recording (webm)</div>
+                </div>
+
+                <div style={{ borderTop: "1px solid rgba(0,0,0,0.06)", marginTop: 8 }} />
+
                 {isHost && (
                   <>
-                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", marginTop: 8 }} />
-                    <button
-                      className="host-action danger"
-                      onClick={() => {
-                        setEndModalOpen(true);
-                        setMoreOpen(false);
-                      }}
-                    >
+                    <button className="host-action danger" onClick={() => { setMoreOpen(false); setEndModalOpen(true); }}>
                       End meeting (host)
                     </button>
                   </>
@@ -189,41 +241,6 @@ export default function Toolbar({
         </div>
       </div>
 
-      {/* Invite modal (floating overlay) */}
-      {inviteOpen && (
-        <div className="invite-modal-backdrop overlay-center" onClick={() => setInviteOpen(false)}>
-          <div className="invite-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="invite-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 style={{ margin: 0 }}>Invite people to this meeting</h3>
-              <button className="icon-btn" onClick={() => setInviteOpen(false)} aria-label="Close">✕</button>
-            </div>
-
-            <div style={{ marginTop: 12 }}>
-              <p style={{ marginTop: 6 }}><strong>Room:</strong> {roomId}</p>
-              <div style={{ marginTop: 6 }}>
-                <input readOnly value={meetingUrl} onFocus={(e) => e.target.select()} style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #eee" }} />
-              </div>
-
-              <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-                <button onClick={() => { window.open(`https://wa.me/?text=${encodeURIComponent("Join my meeting: " + meetingUrl)}`, "_blank"); }} className="btn-secondary">WhatsApp</button>
-                <button onClick={() => window.open(`mailto:?subject=Join meeting&body=${encodeURIComponent(meetingUrl)}`)} className="btn-secondary">Email</button>
-                <button onClick={() => copy(meetingUrl)} className="btn-secondary">Copy link</button>
-                <button onClick={() => setInviteOpen(false)} className="btn-secondary">Close</button>
-              </div>
-
-              <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
-                <div style={{ width: 220, height: 220, background: "#fff", borderRadius: 8, display: "grid", placeItems: "center" }}>
-                  <div style={{ color: "#999" }}>QR preview</div>
-                </div>
-                <div style={{ flex: 1, color: "#cfe9ff", fontSize: 13 }}>
-                  <p>Share this link to let others join the room. Using WhatsApp opens the native web share for mobile users.</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* End modal */}
       {endModalOpen && (
         <div className="invite-modal-backdrop overlay-center" onClick={() => setEndModalOpen(false)}>
@@ -234,22 +251,15 @@ export default function Toolbar({
             </div>
 
             <div style={{ marginTop: 12, color: "#ddd" }}>
-              {isHost ? (
-                <p>Ending the meeting will remove all participants and close the room.</p>
-              ) : (
-                <p>Are you sure you want to leave the meeting? You can rejoin later using the same link.</p>
-              )}
+              {isHost ? <p>Ending the meeting will remove all participants and close the room.</p> : <p>Are you sure you want to leave the meeting?</p>}
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
               <button className="btn-secondary" onClick={() => setEndModalOpen(false)}>Cancel</button>
               <button className="btn-danger" onClick={() => {
                 setEndModalOpen(false);
-                if (isHost && typeof onEndMeeting === "function") {
-                  onEndMeeting();
-                } else {
-                  onLeave();
-                }
+                if (isHost && typeof onEndMeeting === "function") onEndMeeting();
+                else onLeave();
               }}>{isHost ? "End meeting" : "Leave"}</button>
             </div>
           </div>
