@@ -1,11 +1,10 @@
 // src/pages/Meeting.jsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import useWebRTC from "../hooks/useWebRTC";
 import Toolbar from "../components/Toolbar";
 import RightPanel from "../components/RightPanel";
 import VideoGrid from "../components/VideoGrid";
 import "../styles/meeting.css";
-import { IconCam, IconMic } from "../components/icons";
 
 export default function MeetingPage() {
   const qs = new URLSearchParams(window.location.search);
@@ -21,7 +20,6 @@ export default function MeetingPage() {
     startLocalMedia,
     connect,
     disconnect,
-    peerJoined,
     remoteStreams,
     participants,
     on,
@@ -30,13 +28,10 @@ export default function MeetingPage() {
     toggleCam,
     toggleMic,
     startScreenShare,
-    stopScreenShare,
-    selectDevice
+    stopScreenShare
   } = useWebRTC();
 
   const localPreviewRef = useRef(null);
-  const prevParticipantsRef = useRef(null);
-  const [joined, setJoined] = useState(false);
   const [mySocketId, setMySocketId] = useState(null);
   const [isHost, setIsHost] = useState(false);
   const [pinnedId, setPinnedId] = useState(null);
@@ -44,30 +39,50 @@ export default function MeetingPage() {
   const [chatMessages, setChatMessages] = useState([]);
   const [raiseHands, setRaiseHands] = useState(new Set());
   const [panelOpen, setPanelOpen] = useState(null);
-  const [hostLocked, setHostLocked] = useState(false);
   const [error, setError] = useState(null);
 
-  // debug info for right panel
-  const [debugInfo, setDebugInfo] = useState({ wsState: null, peers: 0 });
-
-  // ---- NEW: meeting start info
+  // meeting start info
   const [meetingStartAt, setMeetingStartAt] = useState(null);
   const [hostName, setHostName] = useState(null);
 
-  // ---- NEW: native cam/mic state (driven by local media stream)
+  // native cam/mic state (driven by local media stream)
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
 
-  // REAL Recording state - REPLACED with actual recording functionality
+  // Recording state
   const [mediaRecorder, setMediaRecorder] = useState(null);
-  const [recordedChunks, setRecordedChunks] = useState([]);
   const [recordedBlob, setRecordedBlob] = useState(null);
   const [recordedUrl, setRecordedUrl] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingStartTime, setRecordingStartTime] = useState(null);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [recordingStartedBy, setRecordingStartedBy] = useState(null);
   const [lastRecordingUrl, setLastRecordingUrl] = useState(null);
+
+  // Enhanced Live Captions state
+  const [liveCaptionsEnabled, setLiveCaptionsEnabled] = useState(false);
+  const [captions, setCaptions] = useState([]);
+  const [currentCaption, setCurrentCaption] = useState("");
+  const [captionsLanguage, setCaptionsLanguage] = useState("en-US");
+  const [speechRecognition, setSpeechRecognition] = useState(null);
+  const [isCaptionsActive, setIsCaptionsActive] = useState(false);
+  const [captionsRestartAttempts, setCaptionsRestartAttempts] = useState(0);
+
+  // Helper function to format file size
+  const formatFileSize = useCallback((bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }, []);
+
+  // Helper function to format recording time
+  const formatRecordingTime = useCallback((seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  }, []);
 
   // Recording timer effect
   useEffect(() => {
@@ -82,12 +97,329 @@ export default function MeetingPage() {
     return () => clearInterval(interval);
   }, [isRecording, recordingStartTime]);
 
-  // REAL Recording handler - REPLACED with actual recording functionality
-  const handleStartRecording = async () => {
+  // Enhanced Live Captions functions with continuous recognition
+  const initializeSpeechRecognition = useCallback(() => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      setError("Live captions not supported in this browser. Try Chrome or Edge.");
+      return null;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = captionsLanguage;
+    recognition.maxAlternatives = 1;
+    
+    // Enhanced settings for better continuous recognition
+    if (recognition.continuous !== undefined) {
+      recognition.continuous = true;
+    }
+    if (recognition.interimResults !== undefined) {
+      recognition.interimResults = true;
+    }
+
+    let silenceTimeout;
+    let isRestarting = false;
+
+    const restartRecognition = () => {
+      if (isRestarting || !liveCaptionsEnabled) return;
+      
+      isRestarting = true;
+      console.log("🔄 Restarting speech recognition...");
+      
+      setTimeout(() => {
+        if (liveCaptionsEnabled && recognition) {
+          try {
+            recognition.stop();
+            setTimeout(() => {
+              try {
+                recognition.start();
+                console.log("✅ Speech recognition restarted successfully");
+                setCaptionsRestartAttempts(prev => prev + 1);
+                isRestarting = false;
+              } catch (startError) {
+                console.warn("Failed to restart speech recognition:", startError);
+                isRestarting = false;
+                setTimeout(restartRecognition, 2000);
+              }
+            }, 500);
+          } catch (stopError) {
+            console.warn("Error stopping recognition for restart:", stopError);
+            isRestarting = false;
+          }
+        }
+      }, 1000);
+    };
+
+    recognition.onstart = () => {
+      console.log("🎤 Live captions started - Continuous mode");
+      setIsCaptionsActive(true);
+      setCaptionsRestartAttempts(0);
+    };
+
+    recognition.onresult = (event) => {
+      if (silenceTimeout) {
+        clearTimeout(silenceTimeout);
+      }
+
+      let interimTranscript = '';
+      let finalTranscript = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript + ' ';
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      if (finalTranscript.trim()) {
+        const newCaption = {
+          id: Date.now(),
+          text: finalTranscript.trim(),
+          speaker: name,
+          timestamp: Date.now(),
+          type: 'final'
+        };
+        
+        setCaptions(prev => {
+          const updated = [...prev, newCaption];
+          return updated.slice(-100);
+        });
+        
+        setCurrentCaption("");
+        
+        // Broadcast caption to other participants
+        if (sendHostCommand) {
+          sendHostCommand(roomId, {
+            type: "live-caption",
+            caption: newCaption.text,
+            speaker: name,
+            timestamp: newCaption.timestamp,
+            captionId: newCaption.id
+          });
+        }
+        
+        console.log("📝 Final caption:", finalTranscript.trim());
+      }
+      
+      if (interimTranscript.trim()) {
+        setCurrentCaption(interimTranscript);
+        console.log("📝 Interim caption:", interimTranscript);
+      }
+
+      silenceTimeout = setTimeout(() => {
+        if (liveCaptionsEnabled && isCaptionsActive) {
+          console.log("🔇 Long silence detected, ensuring recognition continues...");
+          setCurrentCaption("");
+        }
+      }, 3000);
+    };
+
+    recognition.onerror = (event) => {
+      console.error("❌ Speech recognition error:", event.error);
+      
+      if (event.error === 'no-speech') {
+        console.log("🔇 No speech detected, continuing...");
+        return;
+      }
+      
+      if (event.error === 'not-allowed') {
+        setError("Microphone permission denied for live captions");
+        setIsCaptionsActive(false);
+      } else if (event.error === 'network') {
+        console.warn("Network error in speech recognition, attempting restart...");
+        restartRecognition();
+      } else {
+        console.warn(`Speech recognition error (${event.error}), attempting restart...`);
+        setTimeout(restartRecognition, 1000);
+      }
+    };
+
+    recognition.onend = () => {
+      console.log("🔚 Speech recognition ended");
+      
+      if (silenceTimeout) {
+        clearTimeout(silenceTimeout);
+      }
+
+      if (liveCaptionsEnabled && !isRestarting) {
+        console.log("🔄 Auto-restarting speech recognition...");
+        setTimeout(() => {
+          if (liveCaptionsEnabled && !isRestarting) {
+            try {
+              recognition.start();
+              console.log("✅ Auto-restart successful");
+            } catch (restartError) {
+              console.warn("Auto-restart failed:", restartError);
+              setTimeout(restartRecognition, 2000);
+            }
+          }
+        }, 500);
+      } else {
+        setIsCaptionsActive(false);
+      }
+    };
+
+    return recognition;
+  }, [captionsLanguage, name, roomId, sendHostCommand, liveCaptionsEnabled]);
+
+  const startLiveCaptions = useCallback(() => {
+    if (!micOn) {
+      setError("Enable your microphone to use live captions");
+      return;
+    }
+
+    if (speechRecognition) {
+      try {
+        speechRecognition.stop();
+      } catch (e) {
+        console.warn("Error stopping existing recognition:", e);
+      }
+    }
+
+    const recognition = initializeSpeechRecognition();
+    if (!recognition) return;
+
+    try {
+      console.log("🚀 Starting live captions with continuous recognition...");
+      recognition.start();
+      setSpeechRecognition(recognition);
+      setLiveCaptionsEnabled(true);
+      setCaptions([]);
+      setCurrentCaption("");
+      
+      sendHostCommand?.(roomId, {
+        type: "livecc-toggle",
+        enabled: true,
+        startedBy: name
+      });
+
+      const captionMessage = {
+        type: "system",
+        text: `📝 Live captions enabled by ${name}`,
+        time: Date.now(),
+        _localId: `captions-start-${Date.now()}`
+      };
+      setChatMessages(prev => [...prev, captionMessage]);
+
+    } catch (error) {
+      console.error("❌ Failed to start speech recognition:", error);
+      setError("Failed to start live captions. Please check microphone permissions.");
+      
+      setTimeout(() => {
+        if (liveCaptionsEnabled) {
+          console.log("🔄 Retrying speech recognition start...");
+          startLiveCaptions();
+        }
+      }, 1000);
+    }
+  }, [initializeSpeechRecognition, micOn, name, roomId, sendHostCommand, speechRecognition, liveCaptionsEnabled]);
+
+  const stopLiveCaptions = useCallback(() => {
+    console.log("🛑 Stopping live captions...");
+    
+    if (speechRecognition) {
+      try {
+        speechRecognition.stop();
+      } catch (error) {
+        console.warn("Error stopping speech recognition:", error);
+      }
+    }
+    
+    setSpeechRecognition(null);
+    setLiveCaptionsEnabled(false);
+    setIsCaptionsActive(false);
+    setCurrentCaption("");
+    setCaptionsRestartAttempts(0);
+    
+    sendHostCommand?.(roomId, {
+      type: "livecc-toggle",
+      enabled: false,
+      stoppedBy: name
+    });
+
+    const captionMessage = {
+      type: "system",
+      text: `📝 Live captions disabled by ${name}`,
+      time: Date.now(),
+      _localId: `captions-stop-${Date.now()}`
+    };
+    setChatMessages(prev => [...prev, captionMessage]);
+  }, [speechRecognition, name, roomId, sendHostCommand]);
+
+  const toggleLiveCaptions = useCallback(() => {
+    if (liveCaptionsEnabled) {
+      stopLiveCaptions();
+    } else {
+      startLiveCaptions();
+    }
+  }, [liveCaptionsEnabled, startLiveCaptions, stopLiveCaptions]);
+
+  const clearCaptions = useCallback(() => {
+    setCaptions([]);
+    setCurrentCaption("");
+  }, []);
+
+  const exportCaptions = useCallback(() => {
+    if (captions.length === 0) {
+      alert("No captions to export");
+      return;
+    }
+
+    const meetingInfo = `Meeting Transcript\nRoom: ${roomId}\nDate: ${new Date().toLocaleString()}\nDuration: ${formatRecordingTime(Math.floor((Date.now() - (meetingStartAt || Date.now())) / 1000))}\nParticipants: ${participants?.length || 1}\n\n`;
+    
+    const transcript = captions
+      .map(caption => `[${new Date(caption.timestamp).toLocaleTimeString()}] ${caption.speaker}: ${caption.text}`)
+      .join('\n');
+
+    const fullTranscript = meetingInfo + transcript;
+
+    const blob = new Blob([fullTranscript], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `meeting-transcript-${roomId}-${new Date().toISOString().split('T')[0]}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    const exportMessage = {
+      type: "system",
+      text: `📄 Meeting transcript exported (${captions.length} captions)`,
+      time: Date.now(),
+      _localId: `export-${Date.now()}`
+    };
+    setChatMessages(prev => [...prev, exportMessage]);
+  }, [captions, roomId, formatRecordingTime, meetingStartAt, participants]);
+
+  // Auto-restart captions if they stop unexpectedly
+  useEffect(() => {
+    let restartInterval;
+    
+    if (liveCaptionsEnabled && !isCaptionsActive) {
+      restartInterval = setInterval(() => {
+        if (liveCaptionsEnabled && !isCaptionsActive && captionsRestartAttempts < 5) {
+          console.log("🔄 Attempting to restart inactive captions...");
+          startLiveCaptions();
+        }
+      }, 5000);
+    }
+    
+    return () => {
+      if (restartInterval) clearInterval(restartInterval);
+    };
+  }, [liveCaptionsEnabled, isCaptionsActive, captionsRestartAttempts, startLiveCaptions]);
+
+  // REAL Recording handler
+  const handleStartRecording = useCallback(async () => {
     try {
       console.log("🟢 Starting recording...");
       
-      // Get the media stream from your camera
       const stream = mediaStreamRef.current;
       
       if (!stream) {
@@ -97,7 +429,6 @@ export default function MeetingPage() {
 
       console.log("📹 Media stream obtained:", stream.getTracks().map(t => t.kind));
 
-      // Check if MediaRecorder is supported
       if (typeof MediaRecorder === 'undefined') {
         alert("❌ Recording not supported in this browser. Please use Chrome, Firefox, or Edge.");
         return;
@@ -112,7 +443,7 @@ export default function MeetingPage() {
         options = { mimeType: 'video/webm' };
       }
       if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-        options = {}; // Let browser choose default
+        options = {};
       }
 
       console.log("🎬 Using MIME type:", options.mimeType || 'browser-default');
@@ -120,7 +451,6 @@ export default function MeetingPage() {
       const recorder = new MediaRecorder(stream, options);
       const chunks = [];
 
-      // Handle data available event
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
           chunks.push(event.data);
@@ -128,7 +458,6 @@ export default function MeetingPage() {
         }
       };
 
-      // Handle recording stop - THIS IS WHERE THE DOWNLOAD HAPPENS
       recorder.onstop = () => {
         console.log("🛑 Recording stopped, processing data...");
         
@@ -138,7 +467,6 @@ export default function MeetingPage() {
           return;
         }
 
-        // Create the final video blob
         const blob = new Blob(chunks, { type: 'video/webm' });
         const url = URL.createObjectURL(blob);
         
@@ -148,10 +476,8 @@ export default function MeetingPage() {
           chunks: chunks.length
         });
 
-        // Store the recording for preview/download
         setRecordedBlob(blob);
         setRecordedUrl(url);
-        setRecordedChunks(chunks);
         setLastRecordingUrl(url);
 
         // AUTO-DOWNLOAD THE RECORDING
@@ -164,7 +490,6 @@ export default function MeetingPage() {
         
         console.log("📥 Auto-downloading recording:", filename);
         
-        // Create download link and trigger download
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;
@@ -174,13 +499,11 @@ export default function MeetingPage() {
         a.click();
         document.body.removeChild(a);
         
-        // Clean up URL object after download
         setTimeout(() => {
           URL.revokeObjectURL(url);
           console.log("🧹 Cleaned up recording URL");
         }, 1000);
 
-        // Show success message
         const downloadMessage = {
           type: "system",
           text: `📥 Recording downloaded automatically (${formatFileSize(blob.size)})`,
@@ -190,7 +513,6 @@ export default function MeetingPage() {
         setChatMessages(prev => [...prev, downloadMessage]);
       };
 
-      // Handle recording errors
       recorder.onerror = (event) => {
         console.error("❌ MediaRecorder error:", event);
         alert(`Recording error: ${event.error?.message || 'Unknown error'}`);
@@ -198,18 +520,14 @@ export default function MeetingPage() {
         setRecordingStartTime(null);
       };
 
-      // Start recording with 1-second chunks for better performance
       recorder.start(1000);
       console.log("🎥 Recording started successfully");
       
       setMediaRecorder(recorder);
       setIsRecording(true);
       setRecordingStartTime(Date.now());
-      setRecordingStartedBy(name);
-      setRecordedChunks([]);
 
-      // Send notification to other participants
-      sendHostCommand && sendHostCommand(roomId, { 
+      sendHostCommand?.(roomId, { 
         type: "record-toggle", 
         enabled: true,
         startTime: Date.now(),
@@ -231,10 +549,10 @@ export default function MeetingPage() {
       setIsRecording(false);
       setRecordingStartTime(null);
     }
-  };
+  }, [mediaStreamRef, roomId, name, mySocketId, sendHostCommand, formatFileSize]);
 
-  // REAL Stop recording handler - REPLACED with actual recording functionality
-  const handleStopRecording = () => {
+  // Stop recording handler
+  const handleStopRecording = useCallback(() => {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       console.log("🛑 Stopping recording...");
       mediaRecorder.stop();
@@ -245,10 +563,8 @@ export default function MeetingPage() {
     const duration = recordingTime;
     setIsRecording(false);
     setRecordingStartTime(null);
-    setRecordingStartedBy(null);
 
-    // Send stop notification to other participants
-    sendHostCommand && sendHostCommand(roomId, { 
+    sendHostCommand?.(roomId, { 
       type: "record-toggle", 
       enabled: false,
       duration: duration,
@@ -262,10 +578,10 @@ export default function MeetingPage() {
       _localId: `recording-stop-${Date.now()}`
     };
     setChatMessages(prev => [...prev, recordingMessage]);
-  };
+  }, [mediaRecorder, recordingTime, roomId, name, sendHostCommand, formatRecordingTime]);
 
-  // Manual download function (in case auto-download fails)
-  const handleDownloadRecording = () => {
+  // Manual download function
+  const handleDownloadRecording = useCallback(() => {
     if (!recordedBlob && !lastRecordingUrl) {
       alert("No recording available to download. Please start and stop a recording first.");
       return;
@@ -278,7 +594,6 @@ export default function MeetingPage() {
     
     const filename = `meeting-recording-${roomId}-${timestamp}.webm`;
     
-    // Use the last recording URL if available, otherwise create new one
     const downloadUrl = lastRecordingUrl || URL.createObjectURL(recordedBlob);
     
     const a = document.createElement('a');
@@ -290,7 +605,6 @@ export default function MeetingPage() {
     a.click();
     document.body.removeChild(a);
     
-    // Show download confirmation
     const downloadMessage = {
       type: "system",
       text: `📥 Recording re-downloaded by ${name}`,
@@ -298,29 +612,12 @@ export default function MeetingPage() {
       _localId: `download-${Date.now()}`
     };
     setChatMessages(prev => [...prev, downloadMessage]);
-  };
+  }, [recordedBlob, lastRecordingUrl, roomId, name]);
 
-  // Helper function to format file size
-  const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  // Helper function to format recording time
-  const formatRecordingTime = (seconds) => {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
-
-  // ---- helper: normalize server messages into the UI shape RightPanel expects
-  const normalizeMessageFromServer = (m) => {
+  // Normalize server messages
+  const normalizeMessageFromServer = useCallback((m) => {
     if (!m) return null;
-    // if server already uses the UI shape, keep fields
+    
     const base = {
       type: m.type || m.messageType || "text",
       from: m.from || m.sender || m.name || m.user || "Someone",
@@ -347,58 +644,74 @@ export default function MeetingPage() {
       };
     }
 
-    // treat 'user' or other legacy types as text
     return {
       ...base,
       type: "text",
       text: m.text || m.message || m.body || (typeof m === "string" ? m : ""),
     };
-  };
+  }, []);
 
   useEffect(() => {
     if (!on) return;
+    
     const offAssign = on("assign-id", (payload) => {
       if (payload?.id) setMySocketId(payload.id);
     });
+    
     const offParts = on("participants", (list) => {
       if (!Array.isArray(list)) return;
       const host = list.find(p => p.isHost) || list[0];
       setIsHost(!!(host && host.socketId === mySocketId));
     });
+    
     const offHost = on("host-command", (c) => {
       if (!c) return;
+      
       if (c.type === "raise-hand") {
         setRaiseHands(prev => {
           const s = new Set(prev);
-          if (c.add) s.add(c.from); else s.delete(c.from);
+          if (c.add) s.add(c.from); 
+          else s.delete(c.from);
           return s;
         });
       }
+      
       if (c.type === "mute-all") {
         try {
           if (mediaStreamRef?.current) {
-            const at = mediaStreamRef.current.getAudioTracks()[0];
-            if (at) at.enabled = false;
+            const audioTrack = mediaStreamRef.current.getAudioTracks()[0];
+            if (audioTrack) audioTrack.enabled = false;
           }
-        } catch (e) {}
+        } catch (error) {
+          console.warn("Failed to mute all:", error);
+        }
       }
+      
       if (c.type === "kicked" && c.target === mySocketId) {
         alert("You were removed by the host");
-        try { disconnect(); } catch (_) {}
+        try { 
+          disconnect(); 
+        } catch (error) {
+          console.warn("Disconnect error:", error);
+        }
         window.location.href = "/";
       }
+      
       if (c.type === "end-meeting" && c.byHost) {
         alert("Host ended meeting");
-        try { disconnect(); } catch (_) {}
+        try { 
+          disconnect(); 
+        } catch (error) {
+          console.warn("Disconnect error:", error);
+        }
         window.location.href = "/";
       }
-      // Handle recording commands from any user
+      
       if (c.type === "record-toggle") {
         if (c.enabled && !isRecording) {
           setIsRecording(true);
           setRecordingStartTime(c.startTime || Date.now());
-          setRecordingStartedBy(c.startedBy || "Someone");
-          // Show recording started message for all participants
+          
           const recordingMessage = {
             type: "system",
             text: `🔴 Recording started by ${c.startedBy || "a participant"}`,
@@ -410,8 +723,7 @@ export default function MeetingPage() {
           setIsRecording(false);
           const duration = c.duration || recordingTime;
           setRecordingStartTime(null);
-          setRecordingStartedBy(null);
-          // Show recording stopped message for all participants
+          
           const recordingMessage = {
             type: "system",
             text: `⏹️ Recording stopped by ${c.stoppedBy || "a participant"}. Duration: ${formatRecordingTime(duration)}`,
@@ -421,9 +733,47 @@ export default function MeetingPage() {
           setChatMessages(prev => [...prev, recordingMessage]);
         }
       }
+
+      // Handle live captions commands
+      if (c.type === "livecc-toggle") {
+        if (c.enabled && !liveCaptionsEnabled) {
+          setLiveCaptionsEnabled(true);
+          const captionMessage = {
+            type: "system",
+            text: `📝 Live captions enabled by ${c.startedBy || "the host"}`,
+            time: Date.now(),
+            _localId: `captions-start-${Date.now()}`
+          };
+          setChatMessages(prev => [...prev, captionMessage]);
+        } else if (!c.enabled && liveCaptionsEnabled) {
+          setLiveCaptionsEnabled(false);
+          const captionMessage = {
+            type: "system",
+            text: `📝 Live captions disabled by ${c.stoppedBy || "the host"}`,
+            time: Date.now(),
+            _localId: `captions-stop-${Date.now()}`
+          };
+          setChatMessages(prev => [...prev, captionMessage]);
+        }
+      }
+
+      // Handle incoming live captions
+      if (c.type === "live-caption" && c.speaker !== name) {
+        const newCaption = {
+          id: c.captionId || Date.now(),
+          text: c.caption,
+          speaker: c.speaker,
+          timestamp: c.timestamp || Date.now(),
+          type: 'final'
+        };
+        
+        setCaptions(prev => {
+          const updated = [...prev, newCaption].slice(-100);
+          return updated;
+        });
+      }
     });
 
-    // normalize incoming chat messages from server
     const offChat = on("chat-message", (m) => {
       if (!m) return;
       const norm = normalizeMessageFromServer(m);
@@ -431,92 +781,117 @@ export default function MeetingPage() {
       if (norm) setChatMessages(prev => [...prev, norm]);
     });
 
-    return () => { offAssign(); offParts(); offHost(); offChat(); };
-  }, [on, mySocketId, isRecording, recordingTime]);
+    return () => { 
+      offAssign?.(); 
+      offParts?.(); 
+      offHost?.(); 
+      offChat?.(); 
+    };
+  }, [on, mySocketId, isRecording, recordingTime, mediaStreamRef, disconnect, normalizeMessageFromServer, formatRecordingTime, liveCaptionsEnabled, name]);
 
-  /* ---------- auto start camera & join ---------- */
+  // Auto start camera & join
   useEffect(() => {
     (async () => {
       try {
         if (typeof startLocalMedia === "function") {
-          try { await startLocalMedia({ video: true, audio: true }); } catch (_) {}
-        }
-        if ((!mediaStreamRef || !mediaStreamRef.current) && navigator.mediaDevices?.getUserMedia) {
-          const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: true }).catch(()=>null);
-          if (s) mediaStreamRef.current = s;
-          if (s && !localVideoElRef.current) {
-            const v = document.createElement("video");
-            v.autoplay = true; v.playsInline = true; v.muted = true;
-            v.srcObject = s;
-            localVideoElRef.current = v;
+          try { 
+            await startLocalMedia({ video: true, audio: true }); 
+          } catch (error) {
+            console.warn("startLocalMedia error:", error);
           }
         }
+        
+        if ((!mediaStreamRef?.current) && navigator.mediaDevices?.getUserMedia) {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true }).catch(() => null);
+          if (stream) {
+            mediaStreamRef.current = stream;
+            if (!localVideoElRef.current) {
+              const video = document.createElement("video");
+              video.autoplay = true; 
+              video.playsInline = true; 
+              video.muted = true;
+              video.srcObject = stream;
+              localVideoElRef.current = video;
+            }
+          }
+        }
+        
         try { 
           await connect({ roomId, name }); 
-          setJoined(true); 
-
-          // ---------- NEW: record meeting start and host name ----------
-          // Use local Date.now() when connecting; if server provides a better start timestamp
-          // you can override meetingStartAt when a server event arrives (participants/room).
+          
           if (!meetingStartAt) setMeetingStartAt(Date.now());
           if (!hostName) setHostName(name);
-        } catch(e){ console.warn("connect failed", e); }
-      } catch (err) {
-        console.warn("autostart error", err);
+        } catch(error){ 
+          console.warn("connect failed", error); 
+        }
+      } catch (error) {
+        console.warn("autostart error", error);
         setError("Could not start camera/mic. Check permissions.");
       }
     })();
-    // eslint-disable-next-line
-  }, [roomId]);
+  }, [roomId, name, startLocalMedia, mediaStreamRef, localVideoElRef, connect, meetingStartAt, hostName]);
 
-  /* mount local preview into hero */
+  // Mount local preview
   useEffect(() => {
     function mount() {
-      const cont = localPreviewRef.current;
-      if (!cont) return;
-      while (cont.firstChild) cont.removeChild(cont.firstChild);
-      const el = localVideoElRef && localVideoElRef.current ? localVideoElRef.current : null;
-      if (el) {
-        el.style.width = "100%";
-        el.style.height = "100%";
-        el.style.objectFit = "cover";
-        el.muted = true;
-        cont.appendChild(el);
-        try { el.play && el.play().catch(()=>{}); } catch(_) {}
+      const container = localPreviewRef.current;
+      if (!container) return;
+      
+      while (container.firstChild) {
+        container.removeChild(container.firstChild);
+      }
+      
+      const element = localVideoElRef?.current;
+      if (element) {
+        element.style.width = "100%";
+        element.style.height = "100%";
+        element.style.objectFit = "cover";
+        element.muted = true;
+        container.appendChild(element);
+        try { 
+          element.play?.()?.catch(() => {}); 
+        } catch(error) {
+          console.warn("Video play error:", error);
+        }
         return;
       }
-      if (mediaStreamRef && mediaStreamRef.current) {
-        const v = document.createElement("video");
-        v.autoplay = true; v.playsInline = true; v.muted = true;
-        v.srcObject = mediaStreamRef.current;
-        v.style.width = "100%"; v.style.height = "100%"; v.style.objectFit = "cover";
-        cont.appendChild(v);
-        try { v.play && v.play().catch(()=>{}); } catch(_) {}
+      
+      if (mediaStreamRef?.current) {
+        const video = document.createElement("video");
+        video.autoplay = true; 
+        video.playsInline = true; 
+        video.muted = true;
+        video.srcObject = mediaStreamRef.current;
+        video.style.width = "100%"; 
+        video.style.height = "100%"; 
+        video.style.objectFit = "cover";
+        container.appendChild(video);
+        try { 
+          video.play?.()?.catch(() => {}); 
+        } catch(error) {
+          console.warn("Video play error:", error);
+        }
         return;
       }
-      const ph = document.createElement("div");
-      ph.style.width = "100%"; ph.style.height = "100%"; ph.style.background = "#111";
-      cont.appendChild(ph);
+      
+      const placeholder = document.createElement("div");
+      placeholder.style.width = "100%"; 
+      placeholder.style.height = "100%"; 
+      placeholder.style.background = "#111";
+      container.appendChild(placeholder);
     }
+    
     mount();
-    const t1 = setTimeout(mount, 300);
-    const t2 = setTimeout(mount, 900);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [localVideoElRef && localVideoElRef.current, mediaStreamRef && mediaStreamRef.current]);
+    const timer1 = setTimeout(mount, 300);
+    const timer2 = setTimeout(mount, 900);
+    
+    return () => { 
+      clearTimeout(timer1); 
+      clearTimeout(timer2); 
+    };
+  }, [localVideoElRef, mediaStreamRef]);
 
-  /* keep debug info updated */
-  useEffect(() => {
-    let t = setInterval(() => {
-      try {
-        const wsState = (wsRef && wsRef.current) ? wsRef.current.readyState : null;
-        const peers = (remoteStreams || []).length;
-        setDebugInfo({ wsState, peers });
-      } catch (e) {}
-    }, 800);
-    return () => clearInterval(t);
-  }, [wsRef, remoteStreams]);
-
-  /* ---------- NEW: keep camOn/micOn in sync with local media ---------- */
+  // Keep camOn/micOn in sync with local media
   useEffect(() => {
     function updateFromStream(stream) {
       if (!stream) {
@@ -524,75 +899,144 @@ export default function MeetingPage() {
         setMicOn(false);
         return;
       }
-      const vt = stream.getVideoTracks()[0];
-      const at = stream.getAudioTracks()[0];
-      setCamOn(!!(vt && vt.enabled !== false));
-      setMicOn(!!(at && at.enabled !== false));
+      const videoTrack = stream.getVideoTracks()[0];
+      const audioTrack = stream.getAudioTracks()[0];
+      setCamOn(!!(videoTrack && videoTrack.enabled !== false));
+      setMicOn(!!(audioTrack && audioTrack.enabled !== false));
     }
 
-    if (mediaStreamRef && mediaStreamRef.current) {
+    if (mediaStreamRef?.current) {
       updateFromStream(mediaStreamRef.current);
     }
 
     if (!on) return;
-    const offLocal = on("local-media-updated", (s) => {
-      updateFromStream(s || mediaStreamRef.current);
+    
+    const offLocal = on("local-media-updated", (stream) => {
+      updateFromStream(stream || mediaStreamRef.current);
     });
+    
     const offParts = on("participants", (list) => {
       if (!Array.isArray(list)) return;
       const me = list.find(p => p.socketId === mySocketId);
-      if (me) {
-        if (typeof me.muted === "boolean") setMicOn(!me.muted);
+      if (me && typeof me.muted === "boolean") {
+        setMicOn(!me.muted);
       }
     });
 
     return () => {
-      offLocal && offLocal();
-      offParts && offParts();
+      offLocal?.();
+      offParts?.();
     };
   }, [on, mediaStreamRef, mySocketId]);
 
-  /* controls */
-  const handleToggleCam = () => { try { toggleCam && toggleCam(); } catch(e) { setError("Camera toggle failed"); } };
-  const handleToggleMic = () => { try { toggleMic && toggleMic(); } catch(e) { setError("Mic toggle failed"); } };
-  const handleShare = async () => { try { await startScreenShare(); setSharing(true); } catch(e){ setError("Share failed"); } };
-  const handleStopShare = async () => { try { await stopScreenShare(); setSharing(false); } catch(e){ setError("Stop share failed"); } };
+  // Clean up speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (speechRecognition) {
+        try {
+          speechRecognition.stop();
+        } catch (error) {
+          console.warn("Error cleaning up speech recognition:", error);
+        }
+      }
+    };
+  }, [speechRecognition]);
 
-  const hostMuteAll = () => { if (!isHost) return; sendHostCommand && sendHostCommand(roomId, { type: "mute-all" }); };
-  const hostKick = (socketId) => { if (!isHost) return; sendHostCommand && sendHostCommand(roomId, { type: "kicked", target: socketId }); };
+  // Controls
+  const handleToggleCam = useCallback(() => { 
+    try { 
+      toggleCam?.(); 
+    } catch(error) { 
+      setError("Camera toggle failed"); 
+      console.error("Camera toggle error:", error);
+    } 
+  }, [toggleCam]);
 
-  const toggleRaise = () => {
+  const handleToggleMic = useCallback(() => { 
+    try { 
+      toggleMic?.(); 
+    } catch(error) { 
+      setError("Mic toggle failed"); 
+      console.error("Mic toggle error:", error);
+    } 
+  }, [toggleMic]);
+
+  const handleShare = useCallback(async () => { 
+    try { 
+      await startScreenShare(); 
+      setSharing(true); 
+    } catch(error){ 
+      setError("Share failed"); 
+      console.error("Share error:", error);
+    } 
+  }, [startScreenShare]);
+
+  const handleStopShare = useCallback(async () => { 
+    try { 
+      await stopScreenShare(); 
+      setSharing(false); 
+    } catch(error){ 
+      setError("Stop share failed"); 
+      console.error("Stop share error:", error);
+    } 
+  }, [stopScreenShare]);
+
+  const hostMuteAll = useCallback(() => { 
+    if (!isHost) return; 
+    sendHostCommand?.(roomId, { type: "mute-all" }); 
+  }, [isHost, sendHostCommand, roomId]);
+
+  const hostKick = useCallback((socketId) => { 
+    if (!isHost) return; 
+    sendHostCommand?.(roomId, { type: "kicked", target: socketId }); 
+  }, [isHost, sendHostCommand, roomId]);
+
+  const toggleRaise = useCallback(() => {
     const has = raiseHands.has(mySocketId);
-    sendHostCommand && sendHostCommand(roomId, { type: "raise-hand", from: mySocketId, add: !has });
-    setRaiseHands(prev => { const s = new Set(prev); if (!has) s.add(mySocketId); else s.delete(mySocketId); return s; });
-  };
+    sendHostCommand?.(roomId, { type: "raise-hand", from: mySocketId, add: !has });
+    setRaiseHands(prev => { 
+      const newSet = new Set(prev); 
+      if (!has) newSet.add(mySocketId); 
+      else newSet.delete(mySocketId); 
+      return newSet; 
+    });
+  }, [raiseHands, mySocketId, sendHostCommand, roomId]);
 
-  const handleEndMeeting = () => {
+  const handleEndMeeting = useCallback(() => {
     if (!isHost) return;
-    try { sendHostCommand(roomId, { type: "end-meeting", byHost: true }); } catch(e) {}
-    try { disconnect(); } catch(e) {}
+    try { 
+      sendHostCommand?.(roomId, { type: "end-meeting", byHost: true }); 
+    } catch(error) {
+      console.error("End meeting error:", error);
+    }
+    try { 
+      disconnect(); 
+    } catch(error) {
+      console.error("Disconnect error:", error);
+    }
     window.location.href = "/";
-  };
+  }, [isHost, sendHostCommand, roomId, disconnect]);
 
-  // Normalize outgoing payloads from RightPanel before sending to server
-  const handleOutgoingChatFromPanel = (m) => {
-    // m will often already be normalized by RightPanel (it sends type: "text"/"file"/"audio")
-    const outgoing = (typeof m === "string")
-      ? { type: "text", from: name, text: m, time: Date.now() }
-      : { ...m, type: m.type === "user" ? "text" : (m.type || "text"), time: m.time || Date.now() };
+  // Handle outgoing chat
+  const handleOutgoingChatFromPanel = useCallback((message) => {
+    const outgoing = (typeof message === "string")
+      ? { type: "text", from: name, text: message, time: Date.now() }
+      : { 
+          ...message, 
+          type: message.type === "user" ? "text" : (message.type || "text"), 
+          time: message.time || Date.now() 
+        };
 
     console.log("[MeetingPage] SEND chat payload:", outgoing);
 
-    // send to server via useWebRTC API (expected to emit to socket)
     try {
-      sendChatMessage && sendChatMessage(roomId, outgoing);
-    } catch (e) {
-      console.warn("sendChatMessage failed:", e);
+      sendChatMessage?.(roomId, outgoing);
+    } catch (error) {
+      console.warn("sendChatMessage failed:", error);
     }
 
-    // optimistic local append (UI will also receive server echo; we dedupe in RightPanel)
     setChatMessages(prev => [...prev, outgoing]);
-  };
+  }, [name, roomId, sendChatMessage]);
 
   return (
     <div className="meeting-page premium">
@@ -603,29 +1047,79 @@ export default function MeetingPage() {
         onToggleCam={handleToggleCam}
         onToggleMic={handleToggleMic}
         onShare={sharing ? handleStopShare : handleShare}
-        onLeave={() => { disconnect(); window.location.href="/"; }}
+        onLeave={() => { 
+          disconnect(); 
+          window.location.href="/"; 
+        }}
         onRaise={toggleRaise}
-        onReact={(emoji)=> sendHostCommand && sendHostCommand(roomId, { type: "reaction", emoji })}
+        onReact={(emoji) => sendHostCommand?.(roomId, { type: "reaction", emoji })}
         onMuteAll={hostMuteAll}
         onLock={() => {}}
         isHost={isHost}
-        hostLocked={hostLocked}
         onEndMeeting={handleEndMeeting}
         camOn={camOn}
         micOn={micOn}
-        // UPDATED: Recording props with real functionality
         onStartRecording={handleStartRecording}
         onStopRecording={handleStopRecording}
         isRecording={isRecording}
         recordingTime={recordingTime}
         recordedUrl={lastRecordingUrl || recordedUrl}
         onDownloadRecording={handleDownloadRecording}
+        onToggleLiveCaptions={toggleLiveCaptions}
+        liveCaptionsEnabled={liveCaptionsEnabled}
+        isCaptionsActive={isCaptionsActive}
       />
 
       <div className="meeting-body">
         <div className="video-grid-wrapper">
           <div className="gallery-area">
-            <div className={`video-box local hero`} ref={localPreviewRef} />
+            {/* Enhanced Live Captions Display */}
+            {(liveCaptionsEnabled && (currentCaption || captions.length > 0)) && (
+              <div className="live-captions-overlay">
+                <div className="captions-header">
+                  <span>📝 Live Captions {isCaptionsActive ? '• LIVE' : '• PAUSED'}</span>
+                  <div className="captions-controls">
+                    <span className="captions-stats">
+                      {captions.length} captions
+                    </span>
+                    <button 
+                      onClick={clearCaptions}
+                      className="captions-btn"
+                      title="Clear captions"
+                    >
+                      🗑️
+                    </button>
+                    <button 
+                      onClick={exportCaptions}
+                      className="captions-btn"
+                      title="Export full transcript"
+                    >
+                      💾
+                    </button>
+                  </div>
+                </div>
+                <div className="captions-display">
+                  {currentCaption && (
+                    <div className="current-caption interim">
+                      <strong>{name}:</strong> {currentCaption}
+                    </div>
+                  )}
+                  <div className="captions-history">
+                    {captions.slice(-4).map((caption) => (
+                      <div key={caption.id} className="caption-item">
+                        <span className="caption-speaker">{caption.speaker}:</span>
+                        <span className="caption-text">{caption.text}</span>
+                        <span className="caption-time">
+                          {new Date(caption.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="video-box local hero" ref={localPreviewRef} />
 
             <VideoGrid
               localStream={null}
@@ -635,7 +1129,7 @@ export default function MeetingPage() {
               onTileClick={(id) => setPinnedId(prev => prev === id ? null : id)}
               includeLocal={false}
               raiseHands={raiseHands}
-              fallbackAvatarUrl={"/favicon.ico"}
+              fallbackAvatarUrl="/favicon.ico"
             />
           </div>
 
@@ -651,26 +1145,32 @@ export default function MeetingPage() {
             onMuteAll={hostMuteAll}
             onKick={hostKick}
             onToggleRecord={(enabled) => {
-              // ALL USERS can toggle recording
               if (enabled) {
                 handleStartRecording();
               } else {
                 handleStopRecording();
               }
             }}
-            onToggleLiveCC={(enabled) => sendHostCommand && sendHostCommand(roomId, { type: "livecc-toggle", enabled })}
+            onToggleLiveCC={toggleLiveCaptions}
             startLocalMedia={startLocalMedia}
-
-            /* NEW props for meeting info */
             meetingStartAt={meetingStartAt}
             roomId={roomId}
             hostName={hostName}
-            /* NEW props for recordings */
             recordedUrl={lastRecordingUrl || recordedUrl}
             isRecording={isRecording}
             recordingTime={recordingTime}
             onDownloadRecording={handleDownloadRecording}
             formatRecordingTime={formatRecordingTime}
+            // Enhanced Live captions props
+            liveCaptionsEnabled={liveCaptionsEnabled}
+            isCaptionsActive={isCaptionsActive}
+            captions={captions}
+            currentCaption={currentCaption}
+            onClearCaptions={clearCaptions}
+            onExportCaptions={exportCaptions}
+            captionsLanguage={captionsLanguage}
+            onCaptionsLanguageChange={setCaptionsLanguage}
+            captionsRestartAttempts={captionsRestartAttempts}
           />
         </div>
       </div>

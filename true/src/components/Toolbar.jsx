@@ -25,18 +25,20 @@ export default function Toolbar({
   onLeave = () => {},
   onRaise = () => {},
   onReact = () => {},
-  onMuteAll = () => {},
-  onLock = () => {},
+
   isHost = false,
-  hostLocked = false,
   onEndMeeting = null,
   camOn = true,
   micOn = true,
-  // NEW: Recording props
+  // Recording props
   onStartRecording = () => {},
   onStopRecording = () => {},
   isRecording = false,
-  recordingTime = 0, // in seconds
+  recordingTime = 0,
+  // Live Captions props
+  onToggleLiveCaptions = () => {},
+  liveCaptionsEnabled = false,
+  isCaptionsActive = false,
 }) {
   const [reactOpen, setReactOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -87,6 +89,11 @@ export default function Toolbar({
     setMoreOpen(false);
   };
 
+  const handleLiveCaptionsToggle = () => {
+    onToggleLiveCaptions && onToggleLiveCaptions();
+    setMoreOpen(false);
+  };
+
   return (
     <>
       <div className="premium-toolbar toolbar-bar" style={{ position: "sticky", top: 0, zIndex: 1000 }}>
@@ -115,6 +122,20 @@ export default function Toolbar({
                   fontWeight: '600' 
                 }}>
                   REC {formatRecordingTime(recordingTime)}
+                </span>
+              </div>
+            )}
+
+            {/* Live Captions indicator */}
+            {liveCaptionsEnabled && (
+              <div className="captions-indicator">
+                <div className={`captions-dot ${isCaptionsActive ? 'active' : ''}`}></div>
+                <span style={{ 
+                  color: '#4cd964', 
+                  fontSize: '13px', 
+                  fontWeight: '600' 
+                }}>
+                  CC {isCaptionsActive ? 'LIVE' : 'PAUSED'}
                 </span>
               </div>
             )}
@@ -188,7 +209,7 @@ export default function Toolbar({
 
             {moreOpen && (
               <div className="more-popup" role="menu" onMouseLeave={() => setMoreOpen(false)}>
-                {/* Recording control - AVAILABLE TO ALL USERS */}
+                {/* Recording control */}
                 <button 
                   className={`host-action ${isRecording ? 'danger' : ''}`} 
                   onClick={handleRecordingToggle}
@@ -206,8 +227,20 @@ export default function Toolbar({
                   )}
                 </button>
 
-                <button className="host-action" onClick={() => { setMoreOpen(false); alert("Meeting info"); }}>
-                  Meeting info
+                {/* Live Captions control */}
+                <button 
+                  className={`host-action ${liveCaptionsEnabled ? 'active' : ''}`} 
+                  onClick={handleLiveCaptionsToggle}
+                >
+                  {liveCaptionsEnabled ? (
+                    <>
+                      📝 Stop Live Captions
+                    </>
+                  ) : (
+                    <>
+                      📝 Start Live Captions
+                    </>
+                  )}
                 </button>
 
                 <button className="host-action" onClick={() => { setMoreOpen(false); onOpenPanel("settings"); }}>

@@ -1,7 +1,7 @@
 // src/components/RightPanel.jsx
 import React, { useEffect, useRef, useState } from "react";
-import "../styles/rightpanel.css"; // keep this import
-import "../styles/meeting.css";    // ensure chat CSS is loaded (the Teams-like chat CSS you added)
+import "../styles/rightpanel.css";
+import "../styles/meeting.css";
 
 function timeAgo(ts) {
   if (!ts) return "";
@@ -46,10 +46,20 @@ export default function RightPanel({
   onToggleLiveCC = () => {},
   startLocalMedia = null,
 
-  // NEW props for meeting info
+  // Meeting info props
   meetingStartAt = null,
   roomId = null,
   hostName = null,
+
+  // Live Captions props
+  liveCaptionsEnabled = false,
+  isCaptionsActive = false,
+  captions = [],
+  currentCaption = "",
+  onClearCaptions = () => {},
+  onExportCaptions = () => {},
+  captionsLanguage = "en-US",
+  onCaptionsLanguageChange = () => {},
 }) {
   const [tab, setTab] = useState(activeTab || "chat");
   const [text, setText] = useState("");
@@ -130,7 +140,7 @@ export default function RightPanel({
             const sameText = (pending.text && cm.text && cm.text === pending.text) || (pending.name && cm.name && cm.name === pending.name);
             const timeClose = Math.abs((cm.time || 0) - (pending.time || 0)) < 5000; // 5s tolerance
             return sameType && sameText && timeClose;
-          } catch (e) {
+          } catch () {
             return false;
           }
         });
@@ -342,7 +352,7 @@ export default function RightPanel({
       className={`right-panel sidebar ${open ? "open" : ""}`}
       role="complementary"
       aria-label="Right panel"
-      style={{ overflowX: "hidden" }} // prevent side scroll on panel root
+      style={{ overflowX: "hidden" }}
     >
       <div className="rp-header">
         <div className="rp-title">
@@ -351,7 +361,7 @@ export default function RightPanel({
             <button className={`rp-tab ${tab === "chat" ? "active" : ""}`} onClick={() => setTab("chat")}>Chat</button>
             <button className={`rp-tab ${tab === "people" ? "active" : ""}`} onClick={() => setTab("people")}>People</button>
             <button className={`rp-tab ${tab === "settings" ? "active" : ""}`} onClick={() => setTab("settings")}>Settings</button>
-            {/* NEW Meeting info tab */}
+            <button className={`rp-tab ${tab === "captions" ? "active" : ""}`} onClick={() => setTab("captions")}>Captions</button>
             <button className={`rp-tab ${tab === "meeting" ? "active" : ""}`} onClick={() => setTab("meeting")}>Meeting info</button>
           </div>
         </div>
@@ -364,7 +374,6 @@ export default function RightPanel({
       <div className="right-panel-body">
         {tab === "chat" && (
           <div className="chat-tab">
-            {/* chat-messages: ensure no horizontal scroll, vertical scroll only */}
             <div
               className="chat-messages"
               ref={messagesRef}
@@ -392,14 +401,13 @@ export default function RightPanel({
                 placeholder="Type a message"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                style={{ flex: 1, minWidth: 0 }} // minWidth:0 avoids input causing overflow
+                style={{ flex: 1, minWidth: 0 }}
               />
 
               <input type="file" ref={fileInputRef} style={{ display: "none" }} onChange={onFileSelected} />
 
               <button type="button" className="tool-btn" onClick={() => fileInputRef.current && fileInputRef.current.click()} title="Attach file">📎</button>
 
-              {/* voice record toggle */}
               {!isRecording ? (
                 <button type="button" className="tool-btn" onClick={startRecording} title="Record voice">🎙️</button>
               ) : (
@@ -485,7 +493,128 @@ export default function RightPanel({
           </div>
         )}
 
-        {/* NEW: Meeting info tab content */}
+        {tab === "captions" && (
+          <div className="captions-tab" style={{ padding: 8, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="right-panel-section">
+              <h4>Live Captions</h4>
+              
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <span>Live Captions Status:</span>
+                  <span style={{ 
+                    color: liveCaptionsEnabled ? (isCaptionsActive ? '#4cd964' : '#ffcc00') : '#ff3b30',
+                    fontWeight: '600'
+                  }}>
+                    {liveCaptionsEnabled ? (isCaptionsActive ? 'LIVE' : 'PAUSED') : 'OFF'}
+                  </span>
+                </div>
+
+                <button 
+                  className={`secondary ${liveCaptionsEnabled ? 'danger' : ''}`} 
+                  onClick={onToggleLiveCC}
+                  style={{ width: '100%', marginBottom: 8 }}
+                >
+                  {liveCaptionsEnabled ? 'Stop Live Captions' : 'Start Live Captions'}
+                </button>
+
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: 'block', marginBottom: 6 }}>Language</label>
+                  <select 
+                    value={captionsLanguage} 
+                    onChange={(e) => onCaptionsLanguageChange(e.target.value)}
+                    style={{ padding: 8, width: "100%", borderRadius: 6 }}
+                    disabled={liveCaptionsEnabled}
+                  >
+                    <option value="en-US">English (US)</option>
+                    <option value="en-GB">English (UK)</option>
+                    <option value="es-ES">Spanish</option>
+                    <option value="fr-FR">French</option>
+                    <option value="de-DE">German</option>
+                    <option value="it-IT">Italian</option>
+                    <option value="pt-BR">Portuguese</option>
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button 
+                    className="secondary" 
+                    onClick={onClearCaptions}
+                    disabled={captions.length === 0}
+                    style={{ flex: 1 }}
+                  >
+                    Clear Captions
+                  </button>
+                  <button 
+                    className="secondary" 
+                    onClick={onExportCaptions}
+                    disabled={captions.length === 0}
+                    style={{ flex: 1 }}
+                  >
+                    Export Transcript
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="right-panel-section">
+              <h4>Current Caption</h4>
+              {currentCaption ? (
+                <div style={{ 
+                  background: 'rgba(255,255,255,0.1)', 
+                  padding: '12px', 
+                  borderRadius: '8px',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  minHeight: '40px'
+                }}>
+                  {currentCaption}
+                </div>
+              ) : (
+                <div style={{ 
+                  color: '#9fb3c8', 
+                  fontStyle: 'italic',
+                  padding: '12px',
+                  textAlign: 'center'
+                }}>
+                  No active caption...
+                </div>
+              )}
+            </div>
+
+            <div className="right-panel-section">
+              <h4>Caption History</h4>
+              <div style={{ 
+                maxHeight: '200px', 
+                overflowY: 'auto',
+                background: 'rgba(0,0,0,0.2)',
+                borderRadius: '8px',
+                padding: '8px'
+              }}>
+                {captions.length === 0 ? (
+                  <div style={{ color: '#9fb3c8', textAlign: 'center', padding: '20px' }}>
+                    No caption history yet
+                  </div>
+                ) : (
+                  captions.slice().reverse().map((caption) => (
+                    <div key={caption.id} style={{ 
+                      padding: '8px', 
+                      borderBottom: '1px solid rgba(255,255,255,0.1)',
+                      fontSize: '13px'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <strong style={{ color: '#c2e6ff' }}>{caption.speaker}</strong>
+                        <span style={{ color: '#9fb3c8', fontSize: '11px' }}>
+                          {new Date(caption.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <div>{caption.text}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {tab === "meeting" && (
           <div className="meeting-info-tab" style={{ padding: 8, display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -521,12 +650,12 @@ export default function RightPanel({
               <ul style={{ margin: 0, paddingLeft: 18, color: "#9fb3c8" }}>
                 <li>Mute on entry: {hostLocked ? "Yes" : "No"}</li>
                 <li>Recording: {recording ? "Enabled" : "Disabled"}</li>
-                <li>Live captions: {livecc ? "On" : "Off"}</li>
+                <li>Live captions: {liveCaptionsEnabled ? "On" : "Off"}</li>
               </ul>
             </div>
 
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              {isHost && <button className="secondary" onClick={() => { if (window.confirm("End meeting for all?")) { onToggleRecord(false); /* optionally call host-end logic */ } }}>End meeting</button>}
+              {isHost && <button className="secondary" onClick={() => { if (window.confirm("End meeting for all?")) { onToggleRecord(false); } }}>End meeting</button>}
               <button className="secondary" onClick={() => navigator.clipboard?.writeText(window.location.href).then(()=>alert("Link copied"))}>Copy Invite</button>
             </div>
           </div>
