@@ -91,10 +91,10 @@ export default function RightPanel({
   const updateTab = useCallback(() => {
     setTab(activeTab || "chat");
   }, [activeTab]);
-useEffect(() => {
-   updateTab();
-}, [updateTab]);
 
+  useEffect(() => {
+    updateTab();
+  }, [updateTab]);
 
   // Meeting timer effect - FIXED: Avoid setState in effect
   useEffect(() => {
@@ -142,47 +142,29 @@ useEffect(() => {
     onSelectDevice(deviceId);
   }, [onSelectDevice]);
 
- useEffect(() => {
-  if (selectedCamera) {
-    onSelectDevice(selectedCamera);
-  }
-}, [selectedCamera, onSelectDevice]);
-
-
-  // When parent provides new chatMessages, remove any pending local messages - FIXED: Avoid setState in effect
   useEffect(() => {
-    if (!chatMessages || chatMessages.length === 0) {
-      // Use requestAnimationFrame to avoid synchronous setState
-      requestAnimationFrame(() => {
-        setLocalPending([]);
-      });
-      return;
+    if (selectedCamera) {
+      onSelectDevice(selectedCamera);
     }
-    
-    // Calculate the new localPending state
-    const newLocalPending = localPending.filter(pending => {
-      const matched = chatMessages.some(cm => {
-        try {
-          if (pending._localId && cm._localId && pending._localId === cm._localId) return true;
-          const sameType = cm.type === pending.type;
-          const sameText = (pending.text && cm.text && cm.text === pending.text) || (pending.name && cm.name && cm.name === pending.name);
-          const timeClose = Math.abs((cm.time || 0) - (pending.time || 0)) < 5000; // 5s tolerance
-          return sameType && sameText && timeClose;
-        } catch {
-          return false;
-        }
-      });
-      return !matched;
+  }, [selectedCamera, onSelectDevice]);
+
+  // FIXED: Proper useEffect for localPending with functional update
+  useEffect(() => {
+    setLocalPending(prevLocalPending => {
+      const newLocalPending = chatMessages.filter(msg => msg.status === 'pending');
+      
+      // Only update if there are actual changes
+      if (newLocalPending.length !== prevLocalPending.length || 
+          !newLocalPending.every((msg, index) => msg.id === prevLocalPending[index]?.id)) {
+        return newLocalPending;
+      }
+      
+      return prevLocalPending;
     });
+  }, [chatMessages]);
 
-    // Only update if there are changes
-    if (newLocalPending.length !== localPending.length) {
-      setLocalPending(newLocalPending);
-    }
-  }, [chatMessages, localPending]);
-
-  // create combined list for rendering: server messages first, then pending
-  const combinedMessages = (chatMessages || []).concat(localPending);
+  // Combined messages for display
+  const combinedMessages = [...chatMessages, ...localPending].sort((a, b) => (a.time || 0) - (b.time || 0));
 
   // Updated submit: create a normalized message object and optimistically add to localPending
   const submitChat = (e) => {

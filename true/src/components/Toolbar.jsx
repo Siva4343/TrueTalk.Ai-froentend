@@ -59,7 +59,7 @@ export default function Toolbar({
     try {
       await navigator.clipboard.writeText(text);
       alert("Copied to clipboard");
-    } catch (e) {
+    } catch {
       prompt("Copy this link:", text);
     }
   };
@@ -71,13 +71,17 @@ export default function Toolbar({
   const handleCamClick = () => {
     try {
       if (typeof onToggleCam === "function") onToggleCam();
-    } catch (e) {}
+    } catch (error) {
+      console.error("Error toggling camera:", error);
+    }
   };
 
   const handleMicClick = () => {
     try {
       if (typeof onToggleMic === "function") onToggleMic();
-    } catch (e) {}
+    } catch (error) {
+      console.error("Error toggling mic:", error);
+    }
   };
 
   const handleRecordingToggle = () => {
