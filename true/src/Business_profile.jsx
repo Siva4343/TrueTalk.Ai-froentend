@@ -437,6 +437,8 @@ export default function BusinessProfile() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 p-6">
+       {/* Chatbot Component */}
+    <ChatBot />
       <div className="max-w-6xl mx-auto space-y-8">
         <h1 className="text-4xl font-extrabold text-center text-blue-800 tracking-tight">
           Business Profile Details
