@@ -28,12 +28,12 @@ export class WebRTCService {
           autoGainControl: true
         }
       });
-      
+
       this.isInitialized = true;
       return this.localStream;
     } catch (error) {
       console.error('Error accessing media devices:', error);
-      
+
       if (error.name === 'OverconstrainedError') {
         this.localStream = await navigator.mediaDevices.getUserMedia({
           video: true,
@@ -42,7 +42,7 @@ export class WebRTCService {
         this.isInitialized = true;
         return this.localStream;
       }
-      
+
       throw error;
     }
   }
@@ -56,9 +56,9 @@ export class WebRTCService {
       ],
       sdpSemantics: 'unified-plan' // Use unified plan for better compatibility
     };
-    
+
     this.peerConnection = new RTCPeerConnection(configuration);
-    
+
     // Add local stream to connection
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => {
@@ -66,11 +66,11 @@ export class WebRTCService {
       });
     }
 
-    // Handle remote stream
+    // Handle remote stream - FIXED: Changed from event.streams[1] to event.streams[0]
     this.peerConnection.ontrack = (event) => {
-      console.log('Received remote stream:', event.streams[1]);
-      this.remoteStream = event.streams[1];
-      
+      console.log('Received remote stream:', event.streams[0]);
+      this.remoteStream = event.streams[0];
+
       if (this.onRemoteStreamCallback) {
         this.onRemoteStreamCallback(this.remoteStream);
       }
@@ -104,7 +104,7 @@ export class WebRTCService {
         offerToReceiveAudio: true,
         offerToReceiveVideo: true
       });
-      
+
       // Fix SDP setup attributes
       const fixedOffer = this.fixSDP(offer);
       await this.peerConnection.setLocalDescription(fixedOffer);
@@ -125,7 +125,7 @@ export class WebRTCService {
         offerToReceiveAudio: true,
         offerToReceiveVideo: true
       });
-      
+
       // Fix SDP setup attributes
       const fixedAnswer = this.fixSDP(answer);
       await this.peerConnection.setLocalDescription(fixedAnswer);
@@ -154,25 +154,25 @@ export class WebRTCService {
   // Fix SDP to handle setup attribute compatibility
   fixSDP(sdp) {
     if (!sdp.sdp) return sdp;
-    
+
     let sdpText = sdp.sdp;
-    
+
     // Fix setup attributes - ensure they're consistent
     sdpText = sdpText.replace(/a=setup:.*\r\n/g, 'a=setup:actpass\r\n');
-    
+
     // Ensure proper ice-options
     sdpText = sdpText.replace(/a=ice-options:.*\r\n/g, 'a=ice-options:trickle\r\n');
-    
+
     // Remove any invalid lines that might cause issues
     sdpText = sdpText.split('\r\n')
       .filter(line => {
         // Remove empty lines and keep valid SDP lines
-        return line.trim() !== '' && 
-               !line.includes('a=mid:data') && // Remove data channels if present
-               !line.includes('m=application'); // Remove application media lines
+        return line.trim() !== '' &&
+          !line.includes('a=mid:data') && // Remove data channels if present
+          !line.includes('m=application'); // Remove application media lines
       })
       .join('\r\n') + '\r\n';
-    
+
     return {
       type: sdp.type,
       sdp: sdpText

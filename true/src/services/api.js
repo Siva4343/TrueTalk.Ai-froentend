@@ -1,14 +1,14 @@
-const API_BASE_URL = 'http://localhost:8000/api'; // Your Django backend
+import { API_CONFIG } from '../config/constants.js';
 
 class ApiService {
   constructor() {
-    this.baseURL = API_BASE_URL;
+    this.baseURL = API_CONFIG.BASE_URL;
   }
 
   // Generic request method
   async request(endpoint, options = {}) {
     const url = `${this.baseURL}${endpoint}`;
-    
+
     const config = {
       headers: {
         'Content-Type': 'application/json',
@@ -26,17 +26,17 @@ class ApiService {
 
     try {
       const response = await fetch(url, config);
-      
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      
+
       // Check if response has content
       const contentLength = response.headers.get('content-length');
       if (contentLength === '0' || response.status === 204) {
         return null;
       }
-      
+
       return await response.json();
     } catch (error) {
       console.error('API request failed:', error);
@@ -99,7 +99,7 @@ class ApiService {
   async upload(endpoint, formData) {
     const url = `${this.baseURL}${endpoint}`;
     const csrfToken = this.getCSRFToken();
-    
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
