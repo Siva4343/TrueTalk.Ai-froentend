@@ -10,6 +10,8 @@ import {
   IconMore,
   IconLeave,
   IconEnd,
+  IconRecord,
+  IconStop,
 } from "./icons";
 
 const LANGS = [
@@ -53,18 +55,29 @@ export default function Toolbar({
   camOn = true,
   micOn = true,
 
-  // NEW props for Live CC + Recording
+  // Live CC props
   liveCcEnabled = false,
   onToggleLiveCc = () => {},
   liveCcLang = "en-US",
   onChangeLiveCcLang = () => {},
-  recording = false,
-  onToggleRecord = () => {},
-  recordingTime = 0, // seconds
+
+  // Recording props (newer unified API)
+  onStartRecording = () => {},
+  onStopRecording = () => {},
+  isRecording = false,
+  recordingTime = 0, // in seconds
 }) {
   const [reactOpen, setReactOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [endModalOpen, setEndModalOpen] = useState(false);
+
+  // Format recording time (HH:MM:SS)
+  const formatRecordingTime = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
 
   useEffect(() => {
     function onKey(e) { if (e.key === "Escape") { setMoreOpen(false); setReactOpen(false); } }
@@ -94,6 +107,15 @@ export default function Toolbar({
     return `${m}:${s}`;
   };
 
+  const handleRecordingToggle = () => {
+    if (isRecording) {
+      onStopRecording && onStopRecording();
+    } else {
+      onStartRecording && onStartRecording();
+    }
+    setMoreOpen(false);
+  };
+
   return (
     <>
       <div className="premium-toolbar toolbar-bar" style={{ position: "sticky", top: 0, zIndex: 1000 }}>
@@ -107,6 +129,20 @@ export default function Toolbar({
             <button className="icon-text-btn" onClick={() => copy(meetingUrl)} title="Copy invite">Copy invite</button>
 
             <button className="icon-text-btn" onClick={() => onShareLink && onShareLink()} title="Share link">Share link</button>
+
+            {/* Recording indicator - only show when recording */}
+            {isRecording && (
+              <div className="recording-indicator">
+                <div className="recording-dot"></div>
+                <span style={{
+                  color: '#ff3b30',
+                  fontSize: '13px',
+                  fontWeight: '600'
+                }}>
+                  REC {formatRecordingTime(recordingTime)}
+                </span>
+              </div>
+            )}
 
             <nav className="toolbar-nav">
               <button className="toolbar-item" onClick={() => togglePanel("chat")} title="Chat">
@@ -172,6 +208,24 @@ export default function Toolbar({
 
             {moreOpen && (
               <div className="more-popup" role="menu" onMouseLeave={() => setMoreOpen(false)}>
+                {/* Recording control - AVAILABLE TO ALL USERS */}
+                <button
+                  className={`host-action ${isRecording ? 'danger' : ''}`}
+                  onClick={handleRecordingToggle}
+                >
+                  {isRecording ? (
+                    <>
+                      <IconStop size={16} />
+                      Stop Recording ({formatRecordingTime(recordingTime)})
+                    </>
+                  ) : (
+                    <>
+                      <IconRecord size={16} />
+                      Start Recording
+                    </>
+                  )}
+                </button>
+
                 <button className="host-action" onClick={() => { setMoreOpen(false); alert("Meeting info"); }}>
                   Meeting info
                 </button>
@@ -200,21 +254,6 @@ export default function Toolbar({
                 </div>
 
                 <div style={{ borderTop: "1px solid rgba(0,0,0,0.06)", marginTop: 8 }} />
-
-                {/* RECORDING */}
-                <div style={{ padding: 8, display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <button
-                      className={`host-action ${recording ? "danger" : ""}`}
-                      onClick={() => { onToggleRecord && onToggleRecord(!recording); }}
-                    >
-                      {recording ? "Stop recording" : "Record meeting"}
-                    </button>
-
-                    {recording && <div style={{ fontSize: 13, color: "#333" }}>● {formatTime(recordingTime)}</div>}
-                  </div>
-                  <div style={{ fontSize: 12, color: "#777" }}>Local recording (webm)</div>
-                </div>
 
                 <div style={{ borderTop: "1px solid rgba(0,0,0,0.06)", marginTop: 8 }} />
 

@@ -98,6 +98,23 @@ export function IconEnd({ size = 16 }) {
   );
 }
 
+// NEW: Recording icons
+export function IconRecord({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="6" fill="#ff3b30" stroke="#ff3b30" strokeWidth="1" />
+    </svg>
+  );
+}
+
+export function IconStop({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect x="6" y="6" width="12" height="12" fill="#ff3b30" stroke="#ff3b30" strokeWidth="1" />
+    </svg>
+  );
+}
+
 export default {
   IconChat,
   IconPeople,
@@ -109,4 +126,6 @@ export default {
   IconMore,
   IconLeave,
   IconEnd,
+  IconRecord,
+  IconStop,
 };

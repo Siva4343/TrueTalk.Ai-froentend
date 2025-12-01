@@ -1,4 +1,4 @@
-  /* ---------- meeting.css (updated) ----------
+/* ---------- meeting.css (updated) ----------
     Goals:
     - Keep hero camera fixed size (600x450) on the left
     - Make right panel a floating overlay (like Teams) that doesn't push/resize the hero
@@ -6,283 +6,322 @@
     - Keep chat panel scrollable and visually contained
   */
 
-  /* safety: consistent box sizing */
-  * { box-sizing: border-box; }
+/* safety: consistent box sizing */
+* { box-sizing: border-box; }
 
-  /* page/frame baseline */
-  html, body, #root {
-    height: 100%;
-    margin: 0;
-    padding: 0;
-    background: linear-gradient(180deg,#071b2a,#071826 60%);
-    color: #eaf6ff;
-    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-    -webkit-font-smoothing:antialiased;
-    -moz-osx-font-smoothing:grayscale;
-  }
+/* page/frame baseline */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(180deg,#071b2a,#071826 60%);
+  color: #eaf6ff;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
 
-  /* top-level meeting page layout */
-  .meeting-page {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;            /* full viewport height */
-    overflow-x: hidden;       /* prevent horizontal scroll from children */
-  }
+/* top-level meeting page layout */
+.meeting-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;            /* full viewport height */
+  overflow-x: hidden;       /* prevent horizontal scroll from children */
+}
 
-  /* toolbar is sticky on top; adjust height if your toolbar differs */
-  .premium-toolbar { position: sticky; top: 0; z-index: 1000; }
+/* toolbar is sticky on top; adjust height if your toolbar differs */
+.premium-toolbar { position: sticky; top: 0; z-index: 1000; }
 
-  /* main body (below toolbar) */
-  .meeting-body {
-    flex: 1 1 auto;
-    display: flex;
-    align-items: flex-start;
-    justify-content: flex-start;
-    min-width: 0;
-    overflow-x: hidden;
-    background: transparent;
-  }
+/* main body (below toolbar) */
+.meeting-body {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-width: 0;
+  overflow-x: hidden;
+  background: transparent;
+}
 
-  /* wrapper for gallery + (floating) panel */
-  .video-grid-wrapper {
-    display: flex;
-    align-items: center;       /* center hero vertically in the available space */
-    justify-content: flex-start;
-    width: 100%;
-    padding: 20px 24px;
-    gap: 18px;
-    min-height: calc(100vh - 88px); /* leave room for toolbar */
-    box-sizing: border-box;
-    overflow: hidden;          /* ensure hero doesn't force page width */
-  }
+/* wrapper for gallery + (floating) panel */
+.video-grid-wrapper {
+  display: flex;
+  align-items: center;       /* center hero vertically in the available space */
+  justify-content: flex-start;
+  width: 100%;
+  padding: 20px 24px;
+  gap: 18px;
+  min-height: calc(100vh - 88px); /* leave room for toolbar */
+  box-sizing: border-box;
+  overflow: hidden;          /* ensure hero doesn't force page width */
+}
 
-  /* gallery area holds the hero and grid; we want hero to be fixed size on left */
-  .gallery-area {
-    flex: 0 0 auto;            /* do not grow/shrink to fill; hero will control size */
-    display: block;
-    min-width: 0;
-  }
+/* gallery area holds the hero and grid; we want hero to be fixed size on left */
+.gallery-area {
+  flex: 0 0 auto;            /* do not grow/shrink to fill; hero will control size */
+  display: block;
+  min-width: 0;
+}
 
-  /* HERO CAMERA (fixed size, left column) */
+/* HERO CAMERA (fixed size, left column) */
+.video-box.local.hero {
+  width: 600px;
+  height: 450px;
+  max-width: calc(100vw - 40px); /* responsive cap */
+  border-radius: 12px;
+  overflow: hidden;
+  background: #222;
+  box-shadow: 0 10px 36px rgba(0,0,0,0.6);
+  display: block;
+}
+
+/* small responsive: on narrow screens reduce hero but keep aspect */
+@media (max-width: 920px) {
   .video-box.local.hero {
-    width: 600px;
-    height: 450px;
-    max-width: calc(100vw - 40px); /* responsive cap */
-    border-radius: 12px;
-    overflow: hidden;
-    background: #222;
-    box-shadow: 0 10px 36px rgba(0,0,0,0.6);
-    display: block;
+    width: calc(100vw - 340px); /* leaving space for panel when open */
+    width: min(480px, calc(100vw - 320px));
+    height: auto;
+    aspect-ratio: 4 / 3;
   }
+}
 
-  /* small responsive: on narrow screens reduce hero but keep aspect */
-  @media (max-width: 920px) {
-    .video-box.local.hero {
-      width: calc(100vw - 340px); /* leaving space for panel when open */
-      width: min(480px, calc(100vw - 320px));
-      height: auto;
-      aspect-ratio: 4 / 3;
-    }
-  }
+/* ---------------- Right panel (floating overlay) ---------------- */
+:root { --panel-width: 360px; --panel-padding: 14px; }
 
-  /* ---------------- Right panel (floating overlay) ---------------- */
-  :root { --panel-width: 360px; --panel-padding: 14px; }
+/* overlay panel position (floating like Teams) */
+.right-panel {
+  position: fixed;
+  top: 72px;                      /* adjust to match your toolbar height */
+  right: 20px;
+  width: var(--panel-width);
+  max-width: calc(100vw - 28px);
+  height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;           /* default: not interactive while closed */
+  z-index: 1200;
+  transform: translateX(12px);
+  transition: transform 220ms ease, opacity 220ms ease, visibility 220ms;
+  opacity: 0;
+  visibility: hidden;
+}
 
-  /* overlay panel position (floating like Teams) */
-  .right-panel {
-    position: fixed;
-    top: 72px;                      /* adjust to match your toolbar height */
-    right: 20px;
-    width: var(--panel-width);
-    max-width: calc(100vw - 28px);
-    height: calc(100vh - 96px);
-    display: flex;
-    flex-direction: column;
-    pointer-events: none;           /* default: not interactive while closed */
-    z-index: 1200;
-    transform: translateX(12px);
-    transition: transform 220ms ease, opacity 220ms ease, visibility 220ms;
-    opacity: 0;
-    visibility: hidden;
-  }
+/* open state: visible and interactive */
+.right-panel.open {
+  transform: translateX(0);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
 
-  /* open state: visible and interactive */
-  .right-panel.open {
-    transform: translateX(0);
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto;
-  }
+/* ensure panel content is scrollable internally */
+.right-panel .right-panel-body {
+  overflow: auto;
+  padding: var(--panel-padding);
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  border-radius: 10px;
+  color: #dfefff;
+  height: 100%;
+  box-shadow: 0 18px 36px rgba(0,0,0,0.55);
+  box-sizing: border-box;
+}
 
-  /* ensure panel content is scrollable internally */
-  .right-panel .right-panel-body {
-    overflow: auto;
-    padding: var(--panel-padding);
-    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
-    border-radius: 10px;
-    color: #dfefff;
-    height: 100%;
-    box-shadow: 0 18px 36px rgba(0,0,0,0.55);
-    box-sizing: border-box;
-  }
+/* panel header */
+.rp-header { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; margin-bottom:8px; }
+.rp-title h3 { margin:0 0 8px 0; color:#fff; font-size:18px; }
+.rp-tabs { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.rp-tab { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.03); padding:6px 8px; border-radius:6px; color:#e6f3ff; cursor:pointer; }
 
-  /* panel header */
-  .rp-header { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; margin-bottom:8px; }
-  .rp-title h3 { margin:0 0 8px 0; color:#fff; font-size:18px; }
-  .rp-tabs { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .rp-tab { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.03); padding:6px 8px; border-radius:6px; color:#e6f3ff; cursor:pointer; }
+/* chat section */
+.chat-tab { display:flex; flex-direction:column; gap:12px; min-height:0; height:100%; }
+.chat-messages {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(0,0,0,0.04);
+  border-radius: 8px;
+}
 
-  /* chat section */
-  .chat-tab { display:flex; flex-direction:column; gap:12px; min-height:0; height:100%; }
-  .chat-messages {
-    flex: 1 1 auto;
-    overflow-y: auto;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    background: rgba(0,0,0,0.04);
-    border-radius: 8px;
-  }
+/* message bubbles */
+.chat-message {
+  max-width: 86%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.3;
+  color: #071226;
+  background: #eef6ff;
+  align-self: flex-start;
+  box-shadow: 0 6px 18px rgba(2,8,20,0.14);
+}
 
-  /* message bubbles */
-  .chat-message {
-    max-width: 86%;
-    padding: 8px 12px;
-    border-radius: 10px;
-    font-size: 13px;
-    line-height: 1.3;
-    color: #071226;
-    background: #eef6ff;
-    align-self: flex-start;
-    box-shadow: 0 6px 18px rgba(2,8,20,0.14);
-  }
+/* from me: right-aligned */
+.chat-message.me {
+  align-self: flex-end;
+  background: linear-gradient(180deg,#1b6fb0,#165d93);
+  color: #fff;
+}
 
-  /* from me: right-aligned */
-  .chat-message.me {
-    align-self: flex-end;
-    background: linear-gradient(180deg,#1b6fb0,#165d93);
-    color: #fff;
-  }
+/* system messages */
+.chat-message.system {
+  align-self: center;
+  background: transparent;
+  color: #9fbddf;
+  font-style: italic;
+  box-shadow: none;
+}
 
-  /* system messages */
-  .chat-message.system {
-    align-self: center;
-    background: transparent;
-    color: #9fbddf;
-    font-style: italic;
-    box-shadow: none;
-  }
+/* message meta */
+.msg-meta { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:12px; color: rgba(255,255,255,0.75); }
+.msg-meta strong { color: inherit; font-weight:700; }
 
-  /* message meta */
-  .msg-meta { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:12px; color: rgba(255,255,255,0.75); }
-  .msg-meta strong { color: inherit; font-weight:700; }
+/* sticky input */
+.chat-input {
+  flex: 0 0 auto;
+  display:flex;
+  gap:8px;
+  padding-top:8px;
+  border-top: 1px solid rgba(255,255,255,0.03);
+  margin-top: 8px;
+}
+.chat-input input {
+  flex:1;
+  padding:10px 12px;
+  border-radius:8px;
+  border:1px solid rgba(255,255,255,0.04);
+  background: rgba(255,255,255,0.02);
+  color: #eaf6ff;
+  outline: none;
+}
+.chat-input button {
+  padding:8px 12px;
+  border-radius:8px;
+  background: linear-gradient(180deg,#1b6fb0,#165d93);
+  color:white;
+  border:none;
+  cursor:pointer;
+}
 
-  /* sticky input */
-  .chat-input {
-    flex: 0 0 auto;
-    display:flex;
-    gap:8px;
-    padding-top:8px;
-    border-top: 1px solid rgba(255,255,255,0.03);
-    margin-top: 8px;
-  }
-  .chat-input input {
-    flex:1;
-    padding:10px 12px;
-    border-radius:8px;
-    border:1px solid rgba(255,255,255,0.04);
-    background: rgba(255,255,255,0.02);
-    color: #eaf6ff;
-    outline: none;
-  }
-  .chat-input button {
-    padding:8px 12px;
-    border-radius:8px;
-    background: linear-gradient(180deg,#1b6fb0,#165d93);
-    color:white;
-    border:none;
-    cursor:pointer;
-  }
+/* participants list */
+.people-list { display:flex; flex-direction:column; gap:8px; overflow:auto; padding-bottom:8px; }
+.person-row { display:flex; gap:10px; align-items:center; padding:8px; border-radius:8px; background: rgba(255,255,255,0.01); }
+.avatar-small { width:36px; height:36px; border-radius:50%; background:#dbeaf7; display:grid; place-items:center; font-weight:700; color:#0b2b4a; }
 
-  /* participants list */
-  .people-list { display:flex; flex-direction:column; gap:8px; overflow:auto; padding-bottom:8px; }
-  .person-row { display:flex; gap:10px; align-items:center; padding:8px; border-radius:8px; background: rgba(255,255,255,0.01); }
-  .avatar-small { width:36px; height:36px; border-radius:50%; background:#dbeaf7; display:grid; place-items:center; font-weight:700; color:#0b2b4a; }
+/* small helpers */
+.muted-note { color: rgba(255,255,255,0.45); font-size:13px; padding:10px; text-align:center; }
 
-  /* small helpers */
-  .muted-note { color: rgba(255,255,255,0.45); font-size:13px; padding:10px; text-align:center; }
+/* hide horizontal scrollbar but allow vertical */
+.chat-messages::-webkit-scrollbar { width: 10px; }
+.chat-messages::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 10px; }
+.chat-messages::-webkit-scrollbar-track { background: transparent; }
 
-  /* hide horizontal scrollbar but allow vertical */
-  .chat-messages::-webkit-scrollbar { width: 10px; }
-  .chat-messages::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 10px; }
-  .chat-messages::-webkit-scrollbar-track { background: transparent; }
+/* ensure page doesn't get horizontal scroll from resizing */
+body, .meeting-page { overflow-x: hidden; }
 
-  /* ensure page doesn't get horizontal scroll from resizing */
-  body, .meeting-page { overflow-x: hidden; }
+/* Recording indicator styles */
+.recording-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 59, 48, 0.1);
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 59, 48, 0.3);
+}
 
-  /* responsive tweaks */
-  @media (max-width: 920px) {
-    .right-panel { width: 320px; right: 8px; top: 64px; height: calc(100vh - 92px); }
-    .video-box.local.hero { width: calc(100vw - 340px); max-width: 480px; height: auto; aspect-ratio: 4/3; }
-  }
-  /* Toolbar (premium) styles — append to meeting.css */
+.recording-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff3b30;
+  animation: pulse 1.5s infinite;
+}
 
-  /* toolbar layout */
-  .premium-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 20px;
-    background: #fff;
-    color: #111;
-    box-shadow: 0 2px 8px rgba(2,8,20,0.06);
-  }
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
 
-  /* brand */
-  .brand { display:flex; align-items:center; gap:12px; }
-  .brand-title { font-weight:700; color:#0b2b4a; }
-  .room-badge { background:#eaf3ff; color:#0b2b4a; padding:4px 8px; border-radius:6px; font-weight:700; }
+/* Style for recording button in more menu */
+.more-popup .host-action.danger {
+  color: #ff3b30;
+  font-weight: 600;
+}
 
-  /* left actions */
-  .toolbar-actions-left { display:flex; align-items:center; gap:12px; margin-left:12px; }
-  .icon-text-btn { background:transparent; border:1px solid rgba(2,8,20,0.06); padding:8px 10px; border-radius:8px; cursor:pointer; }
+.more-popup .host-action.danger:hover {
+  background: rgba(255, 59, 48, 0.1);
+}
 
-  /* nav items */
-  .toolbar-nav { display:flex; gap:6px; align-items:center; margin-left:12px; }
-  .toolbar-item { display:flex; gap:8px; align-items:center; background:transparent; border: none; cursor:pointer; padding:8px 12px; border-radius:8px; color:#0b2b4a; }
-  .toolbar-item:hover { background: rgba(27,111,176,0.06); }
+/* responsive tweaks */
+@media (max-width: 920px) {
+  .right-panel { width: 320px; right: 8px; top: 64px; height: calc(100vh - 92px); }
+  .video-box.local.hero { width: calc(100vw - 340px); max-width: 480px; height: auto; aspect-ratio: 4/3; }
+}
 
-  /* tool buttons (right) */
-  .toolbar-right { display:flex; gap:8px; align-items:center; }
-  .tool-btn { display:flex; gap:8px; align-items:center; background:#fff; border:1px solid rgba(2,8,20,0.06); padding:8px 12px; border-radius:12px; cursor:pointer; color:#0b2b4a; }
-  .tool-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(2,8,20,0.06); }
-  .tool-btn.off { opacity: 0.6; filter: grayscale(20%); }
+/* Toolbar (premium) styles — append to meeting.css */
 
-  /* leave button style */
-  .leave { background: transparent; border: 1px solid rgba(2,8,20,0.06); color:#c0392b; }
-  .host-leave { background: linear-gradient(180deg,#ff6b6b,#ff3b3b); color:#fff; }
+/* toolbar layout */
+.premium-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: #fff;
+  color: #111;
+  box-shadow: 0 2px 8px rgba(2,8,20,0.06);
+}
 
-  /* small icon label */
-  .tool-label { font-size:13px; margin-left:4px; display:inline-block; }
+/* brand */
+.brand { display:flex; align-items:center; gap:12px; }
+.brand-title { font-weight:700; color:#0b2b4a; }
+.room-badge { background:#eaf3ff; color:#0b2b4a; padding:4px 8px; border-radius:6px; font-weight:700; }
 
-  /* react popup */
-  .react-popup { position: absolute; top: 40px; left: 0; display:flex; gap:8px; background: #fff; padding:8px; border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,0.12); z-index:1200; }
-  .react-emoji { font-size:18px; background:transparent; border:none; cursor:pointer; padding:6px; }
+/* left actions */
+.toolbar-actions-left { display:flex; align-items:center; gap:12px; margin-left:12px; }
+.icon-text-btn { background:transparent; border:1px solid rgba(2,8,20,0.06); padding:8px 10px; border-radius:8px; cursor:pointer; }
 
-  /* more popup */
-  .more-popup { position:absolute; right:0; top:40px; background:#fff; border-radius:8px; padding:8px; box-shadow:0 12px 40px rgba(0,0,0,0.12); z-index:1200; display:flex; flex-direction:column; gap:6px; }
-  .more-popup .host-action { border:none; background:transparent; padding:8px 12px; text-align:left; cursor:pointer; }
+/* nav items */
+.toolbar-nav { display:flex; gap:6px; align-items:center; margin-left:12px; }
+.toolbar-item { display:flex; gap:8px; align-items:center; background:transparent; border: none; cursor:pointer; padding:8px 12px; border-radius:8px; color:#0b2b4a; }
+.toolbar-item:hover { background: rgba(27,111,176,0.06); }
 
-  /* invite modal overlay (already present in meeting.css — ensure this matches) */
-  .invite-modal-backdrop { position: fixed; inset:0; display:flex; align-items:flex-start; justify-content:center; padding-top:56px; background: rgba(0,0,0,0.45); z-index:2200; }
-  .invite-modal { width:min(920px,94%); max-height:calc(100vh - 120px); background:#071727; color:#e7f6ff; border-radius:10px; padding:18px; overflow:auto; }
+/* tool buttons (right) */
+.toolbar-right { display:flex; gap:8px; align-items:center; }
+.tool-btn { display:flex; gap:8px; align-items:center; background:#fff; border:1px solid rgba(2,8,20,0.06); padding:8px 12px; border-radius:12px; cursor:pointer; color:#0b2b4a; }
+.tool-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(2,8,20,0.06); }
+.tool-btn.off { opacity: 0.6; filter: grayscale(20%); }
 
-  /* small responsive tweaks */
-  @media (max-width: 920px) {
-    .tool-label { display:none; } /* hide text on small screens for compact toolbar */
-    .icon-text-btn { display:none; }
-  }
+/* leave button style */
+.leave { background: transparent; border: 1px solid rgba(2,8,20,0.06); color:#c0392b; }
+.host-leave { background: linear-gradient(180deg,#ff6b6b,#ff3b3b); color:#fff; }
+
+/* small icon label */
+.tool-label { font-size:13px; margin-left:4px; display:inline-block; }
+
+/* react popup */
+.react-popup { position: absolute; top: 40px; left: 0; display:flex; gap:8px; background: #fff; padding:8px; border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,0.12); z-index:1200; }
+.react-emoji { font-size:18px; background:transparent; border:none; cursor:pointer; padding:6px; }
+
+/* more popup */
+.more-popup { position:absolute; right:0; top:40px; background:#fff; border-radius:8px; padding:8px; box-shadow:0 12px 40px rgba(0,0,0,0.12); z-index:1200; display:flex; flex-direction:column; gap:6px; min-width: 200px; }
+.more-popup .host-action { border:none; background:transparent; padding:8px 12px; text-align:left; cursor:pointer; display: flex; align-items: center; gap: 8px; }
+.more-popup .host-action:hover { background: rgba(27,111,176,0.06); }
+
+/* invite modal overlay (already present in meeting.css — ensure this matches) */
+.invite-modal-backdrop { position: fixed; inset:0; display:flex; align-items:flex-start; justify-content:center; padding-top:56px; background: rgba(0,0,0,0.45); z-index:2200; }
+.invite-modal { width:min(920px,94%); max-height:calc(100vh - 120px); background:#071727; color:#e7f6ff; border-radius:10px; padding:18px; overflow:auto; }
+
+/* small responsive tweaks */
+@media (max-width: 920px) {
+  .tool-label { display:none; } /* hide text on small screens for compact toolbar */
+  .icon-text-btn { display:none; }
+  .recording-indicator span:last-child { display: none; } /* Hide recording time text on mobile */
+}
+
 /* ---------- Live caption styles (append to meeting.css) ---------- */
 
 /* Live caption bar (center bottom) */

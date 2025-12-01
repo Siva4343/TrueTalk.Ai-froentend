@@ -51,10 +51,322 @@ export default function MeetingPage() {
   const speechRef = useRef(null);
   const [captions, setCaptions] = useState([]); // items have { text, from, time, __final }
 
-  // recording
-  const recRef = useRef({ recorder: null, chunks: [], raf: null, timer: 0, timerInt: null });
-  const [recording, setRecording] = useState(false);
+  // ---- NEW: native cam/mic state (driven by local media stream)
+  const [camOn, setCamOn] = useState(true);
+  const [micOn, setMicOn] = useState(true);
+
+  // REAL Recording state - REPLACED with actual recording functionality
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [recordedChunks, setRecordedChunks] = useState([]);
+  const [recordedBlob, setRecordedBlob] = useState(null);
+  const [recordedUrl, setRecordedUrl] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingStartTime, setRecordingStartTime] = useState(null);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [recordingStartedBy, setRecordingStartedBy] = useState(null);
+  const [lastRecordingUrl, setLastRecordingUrl] = useState(null);
+
+  // Some small helpers / defaults (so the file is self-contained)
+  const hostLocked = false;
+  const hostName = name || "Host";
+
+  const hostMuteAll = () => {
+    sendHostCommand && sendHostCommand(roomId, { type: "mute-all" });
+  };
+  const hostKick = (socketId) => {
+    sendHostCommand && sendHostCommand(roomId, { type: "kicked", target: socketId });
+  };
+  const handleEndMeeting = () => {
+    sendHostCommand && sendHostCommand(roomId, { type: "end-meeting" });
+    try { disconnect(); } catch (_) {}
+    window.location.href = "/";
+  };
+
+  // Recording timer effect
+  useEffect(() => {
+    let interval;
+    if (isRecording && recordingStartTime) {
+      interval = setInterval(() => {
+        setRecordingTime(Math.floor((Date.now() - recordingStartTime) / 1000));
+      }, 1000);
+    } else {
+      setRecordingTime(0);
+    }
+    return () => clearInterval(interval);
+  }, [isRecording, recordingStartTime]);
+
+  // REAL Recording handler - REPLACED with actual recording functionality
+  const handleStartRecording = async () => {
+    try {
+      console.log("🟢 Starting recording...");
+      
+      // Get the media stream from your camera
+      const stream = mediaStreamRef.current;
+      
+      if (!stream) {
+        alert("❌ No media stream available for recording. Please make sure your camera is enabled.");
+        return;
+      }
+
+      console.log("📹 Media stream obtained:", stream.getTracks().map(t => t.kind));
+
+      // Check if MediaRecorder is supported
+      if (typeof MediaRecorder === 'undefined') {
+        alert("❌ Recording not supported in this browser. Please use Chrome, Firefox, or Edge.");
+        return;
+      }
+
+      // Try different MIME types for compatibility
+      let options = { mimeType: 'video/webm;codecs=vp9,opus' };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = { mimeType: 'video/webm;codecs=vp8,opus' };
+      }
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = { mimeType: 'video/webm' };
+      }
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = {}; // Let browser choose default
+      }
+
+      console.log("🎬 Using MIME type:", options.mimeType || 'browser-default');
+
+      const recorder = new MediaRecorder(stream, options);
+      const chunks = [];
+
+      // Handle data available event
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data);
+          console.log("📦 Recording chunk:", event.data.size, "bytes");
+        }
+      };
+
+      // Handle recording stop - THIS IS WHERE THE DOWNLOAD HAPPENS
+      recorder.onstop = () => {
+        console.log("🛑 Recording stopped, processing data...");
+        
+        if (chunks.length === 0) {
+          console.warn("⚠️ No recording data captured");
+          alert("No recording data was captured. Please try again.");
+          return;
+        }
+
+        // Create the final video blob
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        
+        console.log("🎉 Recording completed:", {
+          size: blob.size,
+          type: blob.type,
+          chunks: chunks.length
+        });
+
+        // Store the recording for preview/download
+        setRecordedBlob(blob);
+        setRecordedUrl(url);
+        setRecordedChunks(chunks);
+        setLastRecordingUrl(url);
+
+        // AUTO-DOWNLOAD THE RECORDING
+        const timestamp = new Date().toISOString()
+          .replace(/[:.]/g, '-')
+          .replace('T', '_')
+          .split('Z')[0];
+        
+        const filename = `meeting-recording-${roomId}-${timestamp}.webm`;
+        
+        console.log("📥 Auto-downloading recording:", filename);
+        
+        // Create download link and trigger download
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.style.display = 'none';
+        
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        // Clean up URL object after download
+        setTimeout(() => {
+          URL.revokeObjectURL(url);
+          console.log("🧹 Cleaned up recording URL");
+        }, 1000);
+
+        // Show success message
+        const downloadMessage = {
+          type: "system",
+          text: `📥 Recording downloaded automatically (${formatFileSize(blob.size)})`,
+          time: Date.now(),
+          _localId: `download-${Date.now()}`
+        };
+        setChatMessages(prev => [...prev, downloadMessage]);
+      };
+
+      // Handle recording errors
+      recorder.onerror = (event) => {
+        console.error("❌ MediaRecorder error:", event);
+        alert(`Recording error: ${event.error?.message || 'Unknown error'}`);
+        setIsRecording(false);
+        setRecordingStartTime(null);
+      };
+
+      // Start recording with 1-second chunks for better performance
+      recorder.start(1000);
+      console.log("🎥 Recording started successfully");
+      
+      setMediaRecorder(recorder);
+      setIsRecording(true);
+      setRecordingStartTime(Date.now());
+      setRecordingStartedBy(name);
+      setRecordedChunks([]);
+
+      // Send notification to other participants
+      sendHostCommand && sendHostCommand(roomId, { 
+        type: "record-toggle", 
+        enabled: true,
+        startTime: Date.now(),
+        startedBy: name,
+        startedById: mySocketId
+      });
+
+      const recordingMessage = {
+        type: "system",
+        text: `🔴 Recording started by ${name}`,
+        time: Date.now(),
+        _localId: `recording-start-${Date.now()}`
+      };
+      setChatMessages(prev => [...prev, recordingMessage]);
+
+    } catch (error) {
+      console.error("❌ Error starting recording:", error);
+      alert(`Recording failed to start: ${error.message}`);
+      setIsRecording(false);
+      setRecordingStartTime(null);
+    }
+  };
+
+  // REAL Stop recording handler - REPLACED with actual recording functionality
+  const handleStopRecording = () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      console.log("🛑 Stopping recording...");
+      mediaRecorder.stop();
+    } else {
+      console.warn("⚠️ No active recording to stop");
+    }
+    
+    const duration = recordingTime;
+    setIsRecording(false);
+    setRecordingStartTime(null);
+    setRecordingStartedBy(null);
+
+    // Send stop notification to other participants
+    sendHostCommand && sendHostCommand(roomId, { 
+      type: "record-toggle", 
+      enabled: false,
+      duration: duration,
+      stoppedBy: name
+    });
+
+    const recordingMessage = {
+      type: "system",
+      text: `⏹️ Recording stopped. Duration: ${formatRecordingTime(duration)}. File is downloading...`,
+      time: Date.now(),
+      _localId: `recording-stop-${Date.now()}`
+    };
+    setChatMessages(prev => [...prev, recordingMessage]);
+  };
+
+  // Manual download function (in case auto-download fails)
+  const handleDownloadRecording = () => {
+    if (!recordedBlob && !lastRecordingUrl) {
+      alert("No recording available to download. Please start and stop a recording first.");
+      return;
+    }
+
+    const timestamp = new Date().toISOString()
+      .replace(/[:.]/g, '-')
+      .replace('T', '_')
+      .split('Z')[0];
+    
+    const filename = `meeting-recording-${roomId}-${timestamp}.webm`;
+    
+    // Use the last recording URL if available, otherwise create new one
+    const downloadUrl = lastRecordingUrl || URL.createObjectURL(recordedBlob);
+    
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = filename;
+    a.style.display = 'none';
+    
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    // Show download confirmation
+    const downloadMessage = {
+      type: "system",
+      text: `📥 Recording re-downloaded by ${name}`,
+      time: Date.now(),
+      _localId: `download-${Date.now()}`
+    };
+    setChatMessages(prev => [...prev, downloadMessage]);
+  };
+
+  // Helper function to format file size
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // Helper function to format recording time
+  const formatRecordingTime = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // ---- helper: normalize server messages into the UI shape RightPanel expects
+  const normalizeMessageFromServer = (m) => {
+    if (!m) return null;
+    // if server already uses the UI shape, keep fields
+    const base = {
+      type: m.type || m.messageType || "text",
+      from: m.from || m.sender || m.name || m.user || "Someone",
+      time: m.time || m.ts || Date.now(),
+      _localId: m._localId || m._id || m.id || undefined,
+    };
+
+    if (base.type === "file") {
+      return {
+        ...base,
+        name: m.name || m.filename || m.fileName,
+        mime: m.mime || m.fileType,
+        dataUrl: m.dataUrl || m.url || m.fileUrl || m.link,
+        size: m.size || m.fileSize,
+      };
+    }
+
+    if (base.type === "audio") {
+      return {
+        ...base,
+        url: m.url || m.audioUrl || m.dataUrl,
+        duration: m.duration,
+        size: m.size,
+      };
+    }
+
+    // treat 'user' or other legacy types as text
+    return {
+      ...base,
+      type: "text",
+      text: m.text || m.message || m.body || (typeof m === "string" ? m : ""),
+    };
+  };
 
   /* Setup event listeners for signaling events (handles translated captions) */
   useEffect(() => {
@@ -64,10 +376,66 @@ export default function MeetingPage() {
 
     const offParts = on("participants", (list) => {
       if (!Array.isArray(list)) return;
-      setIsHost(() => {
-        const host = list.find(x => x.isHost) || list[0];
-        return !!(host && (host.socketId === mySocketId || host.id === mySocketId));
-      });
+      const host = list.find(p => p.isHost) || list[0];
+      setIsHost(!!(host && host.socketId === mySocketId));
+    });
+
+    const offHost = on("host-command", (c) => {
+      if (!c) return;
+      if (c.type === "raise-hand") {
+        setRaiseHands(prev => {
+          const s = new Set(prev);
+          if (c.add) s.add(c.from); else s.delete(c.from);
+          return s;
+        });
+      }
+      if (c.type === "mute-all") {
+        try {
+          if (mediaStreamRef?.current) {
+            const at = mediaStreamRef.current.getAudioTracks()[0];
+            if (at) at.enabled = false;
+          }
+        } catch (e) {}
+      }
+      if (c.type === "kicked" && c.target === mySocketId) {
+        alert("You were removed by the host");
+        try { disconnect(); } catch (_) {}
+        window.location.href = "/";
+      }
+      if (c.type === "end-meeting" && c.byHost) {
+        alert("Host ended meeting");
+        try { disconnect(); } catch (_) {}
+        window.location.href = "/";
+      }
+      // Handle recording commands from any user
+      if (c.type === "record-toggle") {
+        if (c.enabled && !isRecording) {
+          setIsRecording(true);
+          setRecordingStartTime(c.startTime || Date.now());
+          setRecordingStartedBy(c.startedBy || "Someone");
+          // Show recording started message for all participants
+          const recordingMessage = {
+            type: "system",
+            text: `🔴 Recording started by ${c.startedBy || "a participant"}`,
+            time: Date.now(),
+            _localId: `recording-start-${Date.now()}`
+          };
+          setChatMessages(prev => [...prev, recordingMessage]);
+        } else if (!c.enabled && isRecording) {
+          setIsRecording(false);
+          const duration = c.duration || recordingTime;
+          setRecordingStartTime(null);
+          setRecordingStartedBy(null);
+          // Show recording stopped message for all participants
+          const recordingMessage = {
+            type: "system",
+            text: `⏹️ Recording stopped by ${c.stoppedBy || "a participant"}. Duration: ${formatRecordingTime(duration)}`,
+            time: Date.now(),
+            _localId: `recording-stop-${Date.now()}`
+          };
+          setChatMessages(prev => [...prev, recordingMessage]);
+        }
+      }
     });
 
     // Chat + caption handler
@@ -125,8 +493,8 @@ export default function MeetingPage() {
       setChatMessages(prev => [...prev, m]);
     });
 
-    return () => { offAssign(); offParts(); offChat(); };
-  }, [on, mySocketId, liveCcLang]);
+    return () => { offAssign(); offParts(); offHost(); offChat(); };
+  }, [on, mySocketId, isRecording, recordingTime]);
 
   /* Auto-start camera and connect */
   useEffect(() => {
@@ -221,7 +589,7 @@ export default function MeetingPage() {
           setCaptions(prev => {
             const p = prev.slice();
             if (p.length && p[p.length - 1] && !p[p.length - 1].__final) {
-              p[p.length - 1] = { ...p[p.length - 1], text, time: Date.now(), __final: false };
+              p[p.length - 1] = { ...p[p.length - 1], text, time, __final: false };
             } else {
               p.push({ text, from: name || "You", time: Date.now(), __final: false });
             }
@@ -262,113 +630,18 @@ export default function MeetingPage() {
     }
   };
 
-  /* ---------- Recording (unchanged) ---------- */
-  const startRecording = async () => {
-    if (recRef.current.recorder) return;
-    try {
-      const gallery = document.querySelector(".grid-container") || document.body;
-      const rect = gallery.getBoundingClientRect();
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(640, Math.floor(rect.width));
-      canvas.height = Math.max(360, Math.floor(rect.height));
-      const ctx = canvas.getContext("2d");
-
-      let rafId = 0;
-      const drawLoop = () => {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const videos = Array.from(gallery.querySelectorAll("video"));
-        const cols = 3;
-        const rows = Math.max(1, Math.ceil(videos.length / cols));
-        const w = Math.floor(canvas.width / cols);
-        const h = Math.floor(canvas.height / rows);
-        let i = 0;
-        videos.forEach(v => {
-          try { ctx.drawImage(v, (i % cols) * w, Math.floor(i / cols) * h, w, h); } catch (e) {}
-          i++;
-        });
-        rafId = requestAnimationFrame(drawLoop);
-      };
-      rafId = requestAnimationFrame(drawLoop);
-
-      const videoStream = canvas.captureStream(25);
-
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      const audioCtx = new AudioContext();
-      const dest = audioCtx.createMediaStreamDestination();
-
-      if (mediaStreamRef.current && mediaStreamRef.current.getAudioTracks().length) {
-        try {
-          const src = audioCtx.createMediaStreamSource(mediaStreamRef.current);
-          src.connect(dest);
-        } catch (e) {}
-      }
-
-      (remoteStreams || []).forEach(r => {
-        try {
-          if (r.stream && r.stream.getAudioTracks().length) {
-            const ssrc = audioCtx.createMediaStreamSource(r.stream);
-            ssrc.connect(dest);
-          }
-        } catch (e) {}
-      });
-
-      const combined = new MediaStream();
-      videoStream.getVideoTracks().forEach(t => combined.addTrack(t));
-      dest.stream.getAudioTracks().forEach(t => combined.addTrack(t));
-
-      const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm";
-      const recorder = new MediaRecorder(combined, { mimeType: mime });
-      const chunks = [];
-      recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-      recorder.onstop = () => {
-        cancelAnimationFrame(rafId);
-        const blob = new Blob(chunks, { type: mime });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `meeting-${roomId || "recording"}-${Date.now()}.webm`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        try { audioCtx.close(); } catch(_) {}
-        if (recRef.current.timerInt) clearInterval(recRef.current.timerInt);
-        recRef.current = { recorder: null, chunks: [], raf: null, timer: 0, timerInt: null };
-        setRecording(false);
-        setRecordingTime(0);
-      };
-      recorder.start(1000);
-
-      recRef.current = { recorder, chunks, raf: rafId, timer: 0, timerInt: setInterval(() => {
-        recRef.current.timer += 1;
-        setRecordingTime(recRef.current.timer);
-      }, 1000) };
-
-      setRecording(true);
-    } catch (e) { console.warn(e); setError("Could not start recording."); }
-  };
-
-  const stopRecording = () => {
-    try {
-      if (recRef.current && recRef.current.recorder) {
-        clearInterval(recRef.current.timerInt);
-        recRef.current.recorder.stop();
-      }
-    } catch (e) { console.warn("stop recording failed", e); setError("Stop recording failed."); setRecording(false); setRecordingTime(0); }
-  };
-
   /* toolbar controls wiring */
   const handleToggleLiveCc = (enabled) => {
     if (enabled) startLiveCC(); else stopLiveCC();
   };
 
   const handleToggleRecord = (shouldRecord) => {
-    if (shouldRecord) startRecording(); else stopRecording();
+    if (shouldRecord) handleStartRecording(); else handleStopRecording();
   };
 
   /* camera/mic control proxies */
-  const handleToggleCam = () => { try { toggleCam && toggleCam(); } catch (e) { setError("Camera toggle failed"); } };
-  const handleToggleMic = () => { try { toggleMic && toggleMic(); } catch (e) { setError("Mic toggle failed"); } };
+  const handleToggleCam = () => { try { toggleCam && toggleCam(); setCamOn(prev => !prev); } catch (e) { setError("Camera toggle failed"); } };
+  const handleToggleMic = () => { try { toggleMic && toggleMic(); setMicOn(prev => !prev); } catch (e) { setError("Mic toggle failed"); } };
 
   /* combined participants for grid (remote only) */
   const combinedParticipants = useMemo(() => {
@@ -413,17 +686,17 @@ export default function MeetingPage() {
         onReact={(emoji) => sendHostCommand && sendHostCommand(roomId, { type: "reaction", emoji })}
         onMuteAll={() => sendHostCommand && sendHostCommand(roomId, { type: "mute-all" })}
         isHost={isHost}
-        hostLocked={false}
-        onEndMeeting={() => { sendHostCommand && sendHostCommand(roomId, { type: "end-meeting" }); disconnect(); window.location.href = "/"; }}
-        camOn={!!(mediaStreamRef.current && mediaStreamRef.current.getVideoTracks()[0]?.enabled)}
-        micOn={!!(mediaStreamRef.current && mediaStreamRef.current.getAudioTracks()[0]?.enabled)}
-        liveCcEnabled={liveCcEnabled}
-        onToggleLiveCc={() => handleToggleLiveCc(!liveCcEnabled)}
-        liveCcLang={liveCcLang}
-        onChangeLiveCcLang={(lang) => handleChangeLiveCcLang(lang)}
-        recording={recording}
+        hostLocked={hostLocked}
+        onEndMeeting={handleEndMeeting}
+        camOn={camOn}
+        micOn={micOn}
+        // UPDATED: Recording props with real functionality
+        onStartRecording={handleStartRecording}
+        onStopRecording={handleStopRecording}
+        isRecording={isRecording}
         recordingTime={recordingTime}
-        onToggleRecord={() => handleToggleRecord(!recording)}
+        recordedUrl={lastRecordingUrl || recordedUrl}
+        onDownloadRecording={handleDownloadRecording}
       />
 
       <div className="meeting-body">
@@ -455,14 +728,26 @@ export default function MeetingPage() {
             mySocketId={mySocketId}
             onSendChat={(m) => { sendChatMessage && sendChatMessage(roomId, m); setChatMessages(prev => [...prev, m]); }}
             isHost={isHost}
-            onMuteAll={() => sendHostCommand && sendHostCommand(roomId, { type: "mute-all" })}
-            onKick={(socketId) => sendHostCommand && sendHostCommand(roomId, { type: "kicked", target: socketId })}
-            onToggleRecord={(enabled) => handleToggleRecord(enabled)}
-            onToggleLiveCC={(enabled) => handleToggleLiveCc(enabled)}
+            onMuteAll={hostMuteAll}
+            onKick={hostKick}
+            onToggleRecord={(enabled) => {
+              if (enabled) {
+                handleStartRecording();
+              } else {
+                handleStopRecording();
+              }
+            }}
+            onToggleLiveCC={(enabled) => sendHostCommand && sendHostCommand(roomId, { type: "livecc-toggle", enabled })}
             startLocalMedia={startLocalMedia}
             meetingStartAt={null}
             roomId={roomId}
-            hostName={name}
+            hostName={hostName}
+            /* NEW props for recordings */
+            recordedUrl={lastRecordingUrl || recordedUrl}
+            isRecording={isRecording}
+            recordingTime={recordingTime}
+            onDownloadRecording={handleDownloadRecording}
+            formatRecordingTime={formatRecordingTime}
           />
         </div>
       </div>
