@@ -3,6 +3,7 @@ import moment from "moment-timezone";
 import { Calendar, momentLocalizer, Views } from "react-big-calendar";
 import api from "../api";
 import "react-big-calendar/lib/css/react-big-calendar.css";
+import CalendarAssistant from "../Components/chatbot";
 
 const localizer = momentLocalizer(moment);
 const TZ = "Asia/Kolkata";
@@ -417,6 +418,9 @@ export default function CalendarPage() {
           </div>
         </div>
       )}
+        
+    <CalendarAssistant/>
+        
     </div>
   );
 }
