@@ -38,7 +38,7 @@
   position: fixed;
   bottom: 30px;
   right: 30px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); /* ORANGE */
   color: white;
   border: none;
   border-radius: 50%;
@@ -47,7 +47,7 @@
   cursor: pointer;
   font-size: 16px;
   font-weight: 600;
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 4px 15px rgba(249, 115, 22, 0.4);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -63,11 +63,11 @@
 
 .chatbot-toggle-btn:hover {
   transform: translateY(-2px) scale(1.05);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+  box-shadow: 0 6px 20px rgba(249, 115, 22, 0.5);
 }
 
 .chatbot-toggle-btn.chatbot-open {
-  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  background: linear-gradient(135deg, #ea580c 0%, #c2410c 100%);
   transform: rotate(90deg);
 }
 
@@ -78,10 +78,10 @@
   justify-content: center;
 }
 
-/* Header */
+/* Header - ORANGE */
 .chatbot-header {
   padding: 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); /* ORANGE */
   color: white;
   border-radius: 16px 16px 0 0;
   display: flex;
@@ -149,7 +149,7 @@
 }
 
 .user-message {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); /* ORANGE */
   color: white;
   margin-left: auto;
   border-bottom-right-radius: 5px;
@@ -212,8 +212,8 @@
 }
 
 .chat-input-container input:focus {
-  border-color: #667eea;
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  border-color: #f97316; /* ORANGE on focus */
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1);
 }
 
 .chat-input-container input:disabled {
@@ -223,7 +223,7 @@
 
 .chat-input-container button {
   padding: 14px 24px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); /* ORANGE */
   color: white;
   border: none;
   border-radius: 12px;
@@ -235,7 +235,7 @@
 
 .chat-input-container button:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  box-shadow: 0 4px 12px rgba(249, 115, 22, 0.3);
 }
 
 .chat-input-container button:disabled {
