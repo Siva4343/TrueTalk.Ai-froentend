@@ -52,21 +52,34 @@ export default function Toolbar({
   camOn = true,
   micOn = true,
 
-  // Live CC props (now used)
+  // Live CC props
   liveCcEnabled = false,
   onToggleLiveCc = () => {},
-  liveCcLang = "en-US",
-  onChangeLiveCcLang = () => {},
+  captionLang = "en-US",
+  onChangeCaptionLang = () => {},
+  spokenLang = "en-US",
+  onChangeSpokenLang = () => {},
+
+  // Noise cancellation props
+  useBrowserNoiseSuppression = true,
+  onToggleBrowserNoiseSuppression = () => {},
+  useEnhancedNoiseCancel = false,
+  onToggleEnhancedNoise = () => {},
 
   // Recording props
   onStartRecording = () => {},
   onStopRecording = () => {},
   isRecording = false,
   recordingTime = 0, // seconds
+
+  // NEW props
+  participants = [], // array
+  meetingStartAt = null, // timestamp or null
 }) {
   const [reactOpen, setReactOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [endModalOpen, setEndModalOpen] = useState(false);
+  const [meetingInfoOpen, setMeetingInfoOpen] = useState(false);
 
   const formatRecordingTime = (seconds) => {
     const h = Math.floor(seconds / 3600);
@@ -92,12 +105,12 @@ export default function Toolbar({
     name
   )}`;
 
-  const copy = async (text) => {
+  const copy = async (text, label = "Copied") => {
     try {
       await navigator.clipboard.writeText(text);
-      alert("Copied to clipboard");
+      alert(label);
     } catch (e) {
-      prompt("Copy this link:", text);
+      prompt("Copy this text:", text);
     }
   };
 
@@ -175,7 +188,7 @@ export default function Toolbar({
 
             <div style={{ display: "flex", gap: 8, marginLeft: 12 }}>
               <button
-                onClick={() => copy(meetingUrl)}
+                onClick={() => copy(meetingUrl, "Invite link copied")}
                 style={{
                   padding: "8px 10px",
                   borderRadius: 8,
@@ -303,7 +316,7 @@ export default function Toolbar({
                     position: "absolute",
                     right: 0,
                     top: 42,
-                    width: 300,
+                    width: 360,
                     background: "#fff",
                     borderRadius: 10,
                     padding: 12,
@@ -333,7 +346,7 @@ export default function Toolbar({
                       className="host-action"
                       onClick={() => {
                         setMoreOpen(false);
-                        alert("Meeting info");
+                        setMeetingInfoOpen(true);
                       }}
                       style={{ padding: 8, borderRadius: 8, border: "none", background: "transparent", textAlign: "left", cursor: "pointer" }}
                     >
@@ -353,59 +366,87 @@ export default function Toolbar({
 
                     <div style={{ height: 1, background: "rgba(0,0,0,0.06)", margin: "8px 0" }} />
 
-                    {/* live captions control (controlled props) */}
-                    <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={!!liveCcEnabled}
-                        onChange={(e) => onToggleLiveCc && onToggleLiveCc(e.target.checked)}
-                      />
-                      <span>Live captions</span>
-                    </label>
+                    {/* LIVE captions controls */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <button
+                        onClick={() => {
+                          onToggleLiveCc && onToggleLiveCc(!liveCcEnabled);
+                        }}
+                        style={{
+                          width: "100%",
+                          padding: "10px 12px",
+                          borderRadius: 8,
+                          border: "1px solid rgba(0,0,0,0.06)",
+                          background: liveCcEnabled ? "#0b2b4a" : "#f5f7fb",
+                          color: liveCcEnabled ? "#fff" : "#0b2b4a",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          textAlign: "left",
+                        }}
+                      >
+                        {liveCcEnabled ? "Stop Live Captions" : "Start Live Captions"}
+                      </button>
 
-                    <div style={{ marginTop: 6 }}>
-                      <label style={{ fontSize: 12, color: "#444" }}>Language</label>
-                      <div style={{ marginTop: 6 }}>
-                        <select
-                          value={liveCcLang}
-                          onChange={(e) => onChangeLiveCcLang && onChangeLiveCcLang(e.target.value)}
-                          style={{ width: "100%", padding: 8, borderRadius: 8 }}
-                        >
-                          {LANGS.map((l) => (
-                            <option key={l.code} value={l.code}>
-                              {l.label}
-                            </option>
-                          ))}
-                        </select>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        <div>
+                          <label style={{ fontSize: 12, color: "#444" }}>Spoken language</label>
+                          <div style={{ marginTop: 6 }}>
+                            <select
+                              value={spokenLang}
+                              onChange={(e) => onChangeSpokenLang && onChangeSpokenLang(e.target.value)}
+                              style={{ width: "100%", padding: 8, borderRadius: 8 }}
+                            >
+                              {LANGS.map((l) => (
+                                <option key={l.code} value={l.code}>
+                                  {l.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div style={{ fontSize: 12, color: "#777", marginTop: 6 }}>Use when you speak in a language other than the caption target.</div>
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: 12, color: "#444" }}>Caption language</label>
+                          <div style={{ marginTop: 6 }}>
+                            <select
+                              value={captionLang}
+                              onChange={(e) => onChangeCaptionLang && onChangeCaptionLang(e.target.value)}
+                              style={{ width: "100%", padding: 8, borderRadius: 8 }}
+                            >
+                              {LANGS.map((l) => (
+                                <option key={l.code} value={l.code}>
+                                  {l.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div style={{ fontSize: 12, color: "#777", marginTop: 6 }}>Select which language captions should appear in (server translates).</div>
+                        </div>
                       </div>
                     </div>
 
                     <div style={{ height: 1, background: "rgba(0,0,0,0.06)", margin: "8px 0" }} />
 
-                    {/* leave/end controls in menu as well */}
-                    {isHost ? (
-                      <button
-                        onClick={() => {
-                          setMoreOpen(false);
-                          setEndModalOpen(true);
-                        }}
-                        className="host-action danger"
-                        style={{ padding: 8, borderRadius: 8, background: "#ffebeb", color: "#c0392b", border: "none", cursor: "pointer", textAlign: "left" }}
-                      >
-                        End meeting (host)
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setMoreOpen(false);
-                          onLeave && onLeave();
-                        }}
-                        className="host-action"
-                        style={{ padding: 8, borderRadius: 8, background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}
-                      >
-                        Leave meeting
-                      </button>
-                    )}
+                    {/* Noise cancellation toggles */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <input id="browserNoise" type="checkbox" checked={useBrowserNoiseSuppression} onChange={() => onToggleBrowserNoiseSuppression && onToggleBrowserNoiseSuppression()} />
+                        <label htmlFor="browserNoise" style={{ fontSize: 14 }}>Browser noise suppression (default)</label>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <input id="enhancedNoise" type="checkbox" checked={useEnhancedNoiseCancel} onChange={() => onToggleEnhancedNoise && onToggleEnhancedNoise()} />
+                        <label htmlFor="enhancedNoise" style={{ fontSize: 14 }}>Enhanced noise cancel (soft processing)</label>
+                      </div>
+
+                      <div style={{ fontSize: 12, color: "#777" }}>Enhanced processing uses WebAudio (Biquad + Compressor) to reduce rumble/hiss — may increase CPU usage on low-end devices.</div>
+                    </div>
+
+                    <div style={{ height: 1, background: "rgba(0,0,0,0.06)", margin: "8px 0" }} />
+
+                    {/* Removed "Leave meeting" from this menu on purpose */}
+                    <div style={{ fontSize: 12, color: "#888" }}>Leave meeting is available at the top-right button.</div>
                   </div>
                 </div>
               )}
@@ -453,14 +494,14 @@ export default function Toolbar({
             )}
           </div>
 
-          {/* Floating REC badge - moved upward so it doesn't overlap right controls */}
+          {/* Floating REC badge */}
           {isRecording && (
             <div
               className="recording-indicator"
               style={{
                 position: "absolute",
                 left: "50%",
-                top: -36,            // moved further up so it won't cover the right buttons
+                top: -36,
                 transform: "translateX(-50%)",
                 zIndex: 2100,
                 background: "rgba(255,255,255,0.95)",
@@ -490,7 +531,93 @@ export default function Toolbar({
         </div>
       </div>
 
-      {/* End modal */}
+      {/* Meeting Info Modal - WHITE background (Zoom-style) */}
+      {meetingInfoOpen && (
+        <div
+          className="meeting-info-backdrop"
+          style={{
+            position: "fixed",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 3000,
+            background: "rgba(0,0,0,0.45)",
+          }}
+          onClick={() => setMeetingInfoOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 520,
+              background: "#ffffff",
+              color: "#0b2b4a",
+              borderRadius: 10,
+              padding: 18,
+              boxShadow: "0 20px 50px rgba(2,8,20,0.2)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ margin: 0 }}>Meeting info</h3>
+              <button onClick={() => setMeetingInfoOpen(false)} style={{ border: "none", background: "transparent", fontSize: 18, cursor: "pointer" }}>
+                ✕
+              </button>
+            </div>
+
+            <div style={{ marginTop: 12, color: "#334" }}>
+              <div style={{ marginBottom: 8 }}>
+                <strong>Started:</strong>{" "}
+                {meetingStartAt ? new Date(meetingStartAt).toLocaleString() : "Not recorded"}
+              </div>
+
+              <div style={{ marginBottom: 8 }}>
+                <strong>Invite link</strong>
+                <div style={{ marginTop: 6, display: "flex", gap: 8 }}>
+                  <input
+                    readOnly
+                    value={meetingUrl}
+                    style={{ flex: 1, padding: 8, borderRadius: 8, border: "1px solid rgba(0,0,0,0.08)" }}
+                  />
+                  <button onClick={() => copy(meetingUrl, "Invite link copied")} style={{ padding: "8px 10px", borderRadius: 8 }}>
+                    Copy
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 12 }}>
+                <strong>Participants ({(participants || []).length})</strong>
+                <div style={{ marginTop: 8, maxHeight: 160, overflow: "auto", padding: 8, borderRadius: 8, background: "#fbfcfe", border: "1px solid rgba(0,0,0,0.04)" }}>
+                  {(participants || []).length === 0 ? (
+                    <div style={{ color: "#556" }}>No participants yet</div>
+                  ) : (
+                    <ul style={{ margin: 0, paddingLeft: 14 }}>
+                      {(participants || []).map((p, i) => (
+                        <li key={p.socketId || p.id || i} style={{ marginBottom: 6 }}>
+                          {p.name || p.displayName || p.user || "Guest"}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button onClick={() => copy(meetingUrl, "Invite link copied")} style={{ padding: "8px 12px", borderRadius: 8 }}>
+                  Copy invite
+                </button>
+                <button
+                  onClick={() => setMeetingInfoOpen(false)}
+                  style={{ padding: "8px 12px", borderRadius: 8, background: "#0b2b4a", color: "#fff", border: "none" }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* End modal (unchanged styling you already had) */}
       {endModalOpen && (
         <div
           className="invite-modal-backdrop overlay-center"

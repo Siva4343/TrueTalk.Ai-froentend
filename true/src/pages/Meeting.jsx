@@ -15,6 +15,34 @@ export default function MeetingPage() {
   const pathParts = window.location.pathname.split("/").filter(Boolean);
   const roomId = pathParts[pathParts.length - 1] || qs.get("room") || "";
 
+  // -----------------------------
+  // SIGNALING URL RESOLUTION (UPDATED)
+  // -----------------------------
+  // This block prefers VITE_SIGNALING_URL (if present). Otherwise it builds a ws/wss URL
+  // using the current page host and port 8000 (Django dev server).
+  const signalingResolved = (() => {
+    try {
+      const env = import.meta?.env?.VITE_SIGNALING_URL || null;
+      if (env) return String(env).replace(/\/$/, "");
+    } catch (e) {
+      // ignore
+    }
+
+    // Use same protocol style as the page (wss for https, ws for http)
+    const proto = window.location.protocol === "https:" ? "wss" : "ws";
+    const host = window.location.hostname || "127.0.0.1";
+    const port = 8000; // Django Channels/dev server default
+    return `${proto}://${host}:${port}`;
+  })();
+
+  const signalingUrl = `${String(signalingResolved).replace(/\/$/, "")}/ws/meet/{roomId}/`;
+  // debug
+  console.log("[MeetingPage] signalingUrl ->", signalingUrl);
+
+  // -----------------------------
+  // useWebRTC hook (must be top-level)
+  // pass the signalingUrl so client connects to backend (Channels)
+  // -----------------------------
   const {
     wsRef,
     localVideoElRef,
@@ -34,7 +62,7 @@ export default function MeetingPage() {
     selectDevice,
     // DataChannel helper exposed by hook
     sendCaptionToAll,
-  } = useWebRTC();
+  } = useWebRTC(signalingUrl);
 
   // UI state
   const [mySocketId, setMySocketId] = useState(null);
@@ -48,10 +76,14 @@ export default function MeetingPage() {
   // Invite modal state
   const [inviteOpen, setInviteOpen] = useState(false);
 
+  // Meeting start time state (new)
+  const [meetingStartAt, setMeetingStartAt] = useState(null); // timestamp (ms) when meeting was started by host
+
   // live captions
   const [liveCcEnabled, setLiveCcEnabled] = useState(false);
-  const [liveCcLang, setLiveCcLang] = useState("en-US");
+  const [liveCcLang, setLiveCcLang] = useState("en-US"); // selected **target** language for captions UI
   const speechRef = useRef(null);
+  const speechRestartTimerRef = useRef(null); // watchdog timer for SpeechRecognition
   const [captions, setCaptions] = useState([]); // items have { id?, text, from, time, __final }
   // dedupe between DC and WS
   const lastCaptionFromRef = useRef({ from: null, text: null, time: 0 });
@@ -70,6 +102,10 @@ export default function MeetingPage() {
   const [recordingTime, setRecordingTime] = useState(0);
   const [recordingStartedBy, setRecordingStartedBy] = useState(null);
   const [lastRecordingUrl, setLastRecordingUrl] = useState(null);
+
+  // Camera quality (new)
+  // values: "auto" (default), "4k", "1080p", "720p"
+  const [cameraQuality, setCameraQuality] = useState("auto");
 
   // helpers
   const hostLocked = false;
@@ -106,7 +142,7 @@ export default function MeetingPage() {
       if (mediaStreamRef && mediaStreamRef.current) return mediaStreamRef.current;
       if (typeof startLocalMedia === "function") {
         try {
-          const s = await startLocalMedia({ video: true, audio: true }).catch(()=>null);
+          const s = await startLocalMedia({ video: true, audio: true, resolution: cameraQuality }).catch(()=>null);
           if (s) {
             if (mediaStreamRef && !mediaStreamRef.current) mediaStreamRef.current = s;
             return s;
@@ -287,7 +323,13 @@ export default function MeetingPage() {
       if (!Array.isArray(list)) return;
       setParticipants(list);
       const first = (list && list.length) ? list[0] : null;
-      setIsHost(!!(first && first.socketId && first.socketId === mySocketId));
+      const amHost = !!(first && first.socketId && first.socketId === mySocketId);
+      setIsHost(amHost);
+
+      // set meeting start when host appears (only set once)
+      if (!meetingStartAt && amHost) {
+        setMeetingStartAt(Date.now());
+      }
     });
 
     const offHost = on("host-command", (c) => {
@@ -403,17 +445,21 @@ export default function MeetingPage() {
       try {
         if (!data) return;
         if (data.type === "caption") {
-          const fromName = data.fromName || from || "Someone";
+          // choose a stable id for dedupe: prefer fromSocket (if sender provided it),
+          // otherwise fall back to the remote peer id 'from' or fromName.
+          const fromSocketId = data.fromSocket || data.from || from || null;
+          const fromName = data.fromName || data.from || from || "Someone";
           const text = (data.text || "").trim();
           const isFinal = !!data.isFinal;
           const time = data.time || Date.now();
 
           // dedupe between DC and WS: skip if same as last seen (close in time)
           const last = lastCaptionFromRef.current;
-          if (last.from === fromName && last.text === text && Math.abs((time || 0) - (last.time || 0)) < 3000) {
+          if (last.from === fromSocketId && last.text === text && Math.abs((time || 0) - (last.time || 0)) < 3000) {
             return;
           }
-          lastCaptionFromRef.current = { from: fromName, text, time };
+          // update last seen based on stable id
+          lastCaptionFromRef.current = { from: fromSocketId, text, time };
 
           setCaptions(prev => {
             const p = prev.slice();
@@ -448,15 +494,22 @@ export default function MeetingPage() {
       } catch (e) { console.warn("dc-message handler err", e); }
     });
 
-    return () => { offAssign(); offParts(); offHost(); offChat(); offDc(); };
-  }, [on, mySocketId, isRecording, recordingTime, liveCcLang, sendCaptionToAll, sendChatMessage]);
+    // safer cleanup wrapper to avoid errors if any offX is undefined
+    return () => {
+      try { offAssign && offAssign(); } catch(_) {}
+      try { offParts && offParts(); } catch(_) {}
+      try { offHost && offHost(); } catch(_) {}
+      try { offChat && offChat(); } catch(_) {}
+      try { offDc && offDc(); } catch(_) {}
+    };
+  }, [on, mySocketId, isRecording, recordingTime, liveCcLang, sendCaptionToAll, sendChatMessage, meetingStartAt]);
 
   /* Auto-start camera and connect */
   useEffect(() => {
     (async () => {
       try {
         if (typeof startLocalMedia === "function") {
-          try { await startLocalMedia({ video: true, audio: true }); } catch (_) {}
+          try { await startLocalMedia({ video: true, audio: true, resolution: cameraQuality }); } catch (_) {}
         }
         if ((!mediaStreamRef || !mediaStreamRef.current) && navigator.mediaDevices?.getUserMedia) {
           const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: true }).catch(()=>null);
@@ -469,15 +522,29 @@ export default function MeetingPage() {
       }
     })();
     // eslint-disable-next-line
-  }, [roomId]);
+  }, [roomId, cameraQuality]);
 
   /* ---------- Live captions (SpeechRecognition) ---------- */
   const startLiveCC = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) { alert("Live captions not supported in this browser."); return; }
+
     try {
+      // If there's already a recognizer, stop it first
+      if (speechRef.current) {
+        try { speechRef.current.onresult = null; speechRef.current.onend = null; speechRef.current.onerror = null; speechRef.current.stop(); } catch(_) {}
+        speechRef.current = null;
+      }
+
       const r = new SpeechRecognition();
-      r.lang = liveCcLang || "en-US";
+
+      // IMPORTANT: recognition language should be the **source** language.
+      // We will set it to English by default unless user explicitly selected an English target
+      // (i.e. if they chose en-XX as UI language we respect it).
+      const chosenTarget = (liveCcLang || "en-US").toString();
+      const sourceLang = (String(chosenTarget).toLowerCase().startsWith("en")) ? chosenTarget : "en-US";
+      r.lang = sourceLang;
+
       r.interimResults = true;
       r.continuous = true;
 
@@ -492,7 +559,7 @@ export default function MeetingPage() {
 
           if (!transcript) return;
 
-          // Update local UI
+          // Update local UI immediately (shows recognized text)
           if (isFinal) {
             setCaptions(prev => {
               const p = prev.slice();
@@ -521,7 +588,9 @@ export default function MeetingPage() {
             text: transcript,
             fromName: name || "You",
             time: Date.now(),
-            isFinal
+            isFinal,
+            // IMPORTANT: include my socket id so clients can dedupe DC vs WS messages:
+            fromSocket: mySocketId || null
           };
 
           // Try DataChannel fast path (if available)
@@ -535,19 +604,22 @@ export default function MeetingPage() {
             sentCount = 0;
           }
 
-          // Always still send to websocket backend for translation/history (server-side)
+          // Only send *interim* to server when no DC is available (avoid duplicates).
+          // Always send final to server (for translation/history).
           try {
             if (typeof sendChatMessage === "function") {
-              // derive short code from liveCcLang (e.g. "te" from "te-IN" or "te")
               const shortLang = (liveCcLang || "en-US").split("-")[0].toLowerCase();
-              sendChatMessage(roomId, {
-                type: "caption",
-                from: name,
-                text: transcript,
-                time: Date.now(),
-                isFinal: isFinal,
-                targetLang: shortLang // <-- NEW: tells server which language to prioritize/translate into
-              });
+              const shouldSendToServer = (sentCount === 0) || isFinal;
+              if (shouldSendToServer) {
+                sendChatMessage(roomId, {
+                  type: "caption",
+                  from: name,
+                  text: transcript,
+                  time: Date.now(),
+                  isFinal: isFinal,
+                  targetLang: shortLang // tell server which language to prioritise
+                });
+              }
             }
           } catch (e) { console.warn("send caption ws failed", e); }
 
@@ -556,31 +628,76 @@ export default function MeetingPage() {
         }
       };
 
-      r.onerror = (e) => console.warn("speech err", e);
-      r.onend = () => {
-        // auto-restart if enabled
+      r.onerror = (e) => {
+        console.warn("speech err", e);
+        // if aborted or other error, tear down and restart after a short delay
+        try {
+          if (speechRef.current) {
+            try { speechRef.current.onresult = null; speechRef.current.onend = null; } catch(_) {}
+            speechRef.current = null;
+          }
+        } catch (_) {}
         if (liveCcEnabled) {
-          try { r.start(); } catch(_) {}
+          setTimeout(() => {
+            try { startLiveCC(); } catch(_) {}
+          }, 300);
+        }
+      };
+
+      r.onend = () => {
+        // when the native recognizer ends, clear the reference and restart if enabled
+        try { speechRef.current = null; } catch(_) {}
+        if (liveCcEnabled) {
+          setTimeout(() => {
+            try { startLiveCC(); } catch(_) {}
+          }, 250);
         }
       };
 
       r.start();
       speechRef.current = r;
       setLiveCcEnabled(true);
-    } catch (e) { console.warn("startLiveCC failed", e); setError("Live captions failed."); }
+
+      // set up periodic restart to avoid long-running aborted/quiet states (every 45s)
+      try {
+        if (speechRestartTimerRef.current) {
+          clearInterval(speechRestartTimerRef.current);
+          speechRestartTimerRef.current = null;
+        }
+        speechRestartTimerRef.current = setInterval(() => {
+          try {
+            // restart recognizer to keep it healthy
+            if (speechRef.current) {
+              try { speechRef.current.onresult = null; speechRef.current.onend = null; speechRef.current.onerror = null; speechRef.current.stop(); } catch(_) {}
+              speechRef.current = null;
+            }
+            startLiveCC();
+          } catch (err) { /* swallow */ }
+        }, 45000); // 45 seconds
+      } catch (e) {}
+    } catch (e) {
+      console.warn("startLiveCC failed", e);
+      setError("Live captions failed.");
+    }
   };
 
   const stopLiveCC = () => {
     setLiveCcEnabled(false);
     if (speechRef.current) {
-      try { speechRef.current.stop(); } catch(_) {}
+      try { speechRef.current.onresult = null; speechRef.current.onend = null; speechRef.current.onerror = null; speechRef.current.stop(); } catch(_) {}
       speechRef.current = null;
+    }
+    if (speechRestartTimerRef.current) {
+      try { clearInterval(speechRestartTimerRef.current); } catch(_) {}
+      speechRestartTimerRef.current = null;
     }
     setCaptions(prev => prev.map(c => ({ ...c, __final: !!c.__final })));
   };
 
   const handleChangeLiveCcLang = (lang) => {
     setLiveCcLang(lang);
+    // we keep recognition language as source (default en-US). For a more advanced flow
+    // you could add a UI control "spoken language" separate from "caption language".
     if (liveCcEnabled) {
       try {
         stopLiveCC();
@@ -628,6 +745,36 @@ export default function MeetingPage() {
       setError("Screen share failed or was cancelled.");
       setTimeout(() => setError(null), 3500);
     }
+  };
+
+  // handle device selection from RightPanel; request media with current quality
+  const handleSelectDevice = async (deviceId) => {
+    try {
+      // prefer startLocalMedia with deviceId+resolution so constraints apply on re-acquire
+      if (typeof startLocalMedia === "function") {
+        await startLocalMedia({ video: true, audio: true, deviceId, resolution: cameraQuality }).catch(()=>null);
+      } else if (typeof selectDevice === "function") {
+        await selectDevice(deviceId);
+      }
+    } catch (e) { console.warn("handleSelectDevice failed", e); }
+  };
+
+  // change camera quality and re-acquire camera with chosen resolution
+  const handleChangeCameraQuality = async (quality) => {
+    try {
+      const q = String(quality || "auto").toLowerCase();
+      setCameraQuality(q);
+      if (typeof startLocalMedia === "function") {
+        // re-acquire using currently selected device if available
+        // Try preserve deviceId if current stream has a video track with deviceId
+        let deviceId = null;
+        try {
+          const t = mediaStreamRef?.current?.getVideoTracks()[0];
+          if (t && t.getSettings && t.getSettings().deviceId) deviceId = t.getSettings().deviceId;
+        } catch (e) {}
+        await startLocalMedia({ video: true, audio: true, deviceId: deviceId || null, resolution: q }).catch(()=>null);
+      }
+    } catch (e) { console.warn("change camera quality failed", e); }
   };
 
   // RecordingIndicator component
@@ -688,11 +835,17 @@ export default function MeetingPage() {
         recordingTime={recordingTime}
         recordedUrl={lastRecordingUrl || recordedUrl}
         onDownloadRecording={handleDownloadRecording}
-        // LIVE CC props (wired)
+        // LIVE CC props (wired) — use prop names Toolbar expects
         liveCcEnabled={liveCcEnabled}
         onToggleLiveCc={handleToggleLiveCc}
-        liveCcLang={liveCcLang}
-        onChangeLiveCcLang={handleChangeLiveCcLang}
+        captionLang={liveCcLang}
+        onChangeCaptionLang={handleChangeLiveCcLang}
+        // optional: spokenLang stub (Toolbar supports it)
+        spokenLang={"en-US"}
+        onChangeSpokenLang={() => {}}
+        // NEW: pass participants + meeting start time for meeting-info UI
+        participants={participants}
+        meetingStartAt={meetingStartAt}
       />
 
       <div className="meeting-body">
@@ -706,7 +859,13 @@ export default function MeetingPage() {
                 playsInline
                 muted
                 className="local-camera-video"
-                style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 12 }}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                  borderRadius: 12,
+                  transform: "scaleX(-1)" // mirrored by default (Teams-style)
+                }}
               />
             </div>
 
@@ -741,17 +900,24 @@ export default function MeetingPage() {
                 handleStopRecording();
               }
             }}
+            // removed local toggle from panel - toolbar/menu triggers live CC
             onToggleLiveCC={(enabled) => sendHostCommand && sendHostCommand(roomId, { type: "livecc-toggle", enabled })}
             startLocalMedia={startLocalMedia}
-            meetingStartAt={null}
+            meetingStartAt={meetingStartAt}
             roomId={roomId}
             hostName={hostName}
-            /* NEW props for recordings */
+            /* NEW props for recordings & camera quality */
             recordedUrl={lastRecordingUrl || recordedUrl}
             isRecording={isRecording}
             recordingTime={recordingTime}
             onDownloadRecording={handleDownloadRecording}
             formatRecordingTime={formatRecordingTime}
+            // camera quality integration (RightPanel expects these prop names)
+            currentResolution={cameraQuality}
+            onChangeResolution={handleChangeCameraQuality}
+            onSelectDevice={handleSelectDevice}
+            // expose live CC status for display (RightPanel no longer toggles it)
+            liveCcEnabled={liveCcEnabled}
           />
         </div>
       </div>

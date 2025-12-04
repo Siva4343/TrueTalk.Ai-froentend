@@ -1,7 +1,7 @@
 // src/components/RightPanel.jsx
 import React, { useEffect, useRef, useState } from "react";
-import "../styles/rightpanel.css"; // keep this import
-import "../styles/meeting.css";    // ensure chat CSS is loaded (the Teams-like chat CSS you added)
+import "../styles/rightpanel.css";
+import "../styles/meeting.css";
 
 function timeAgo(ts) {
   if (!ts) return "";
@@ -45,11 +45,18 @@ export default function RightPanel({
   onToggleRecord = () => {},
   onToggleLiveCC = () => {},
   startLocalMedia = null,
-
-  // NEW props for meeting info
   meetingStartAt = null,
   roomId = null,
   hostName = null,
+
+  // NEW props
+  recordedUrl = null,
+  isRecording = false,
+  recordingTime = 0,
+  onDownloadRecording = () => {},
+  formatRecordingTime = (s) => "00:00",
+  onChangeResolution = () => {},
+  currentResolution = "auto",
 }) {
   const [tab, setTab] = useState(activeTab || "chat");
   const [text, setText] = useState("");
@@ -59,30 +66,22 @@ export default function RightPanel({
   const [recording, setRecording] = useState(false);
   const [livecc, setLivecc] = useState(false);
 
-  // optimistic local pending messages (shown until server echoes back)
   const [localPending, setLocalPending] = useState([]);
-
-  // emoji picker
   const [emojiOpen, setEmojiOpen] = useState(false);
   const emojiList = ["😀","😃","😂","😊","😍","😮","😢","👍","🙏","🎉","🔥","💯","😅","😉","🤝","🎁","😎","🤔","🙌","❤️"];
-
-  // file input ref
   const fileInputRef = useRef(null);
 
-  // voice recorder
-  const recRef = useRef(null); // MediaRecorder
+  const recRef = useRef(null);
   const chunksRef = useRef([]);
-  const [isRecording, setIsRecording] = useState(false);
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [recordStartAt, setRecordStartAt] = useState(null);
 
-  // Meeting info timer (seconds)
   const [elapsedSec, setElapsedSec] = useState(() => meetingStartAt ? Math.floor((Date.now() - meetingStartAt) / 1000) : 0);
 
   useEffect(() => {
     setTab(activeTab || "chat");
   }, [activeTab]);
 
-  // Meeting timer effect
   useEffect(() => {
     if (!meetingStartAt) {
       setElapsedSec(0);
@@ -95,7 +94,6 @@ export default function RightPanel({
     return () => clearInterval(tid);
   }, [meetingStartAt]);
 
-  // auto scroll to bottom when chat messages change (vertical only)
   useEffect(() => {
     if (messagesRef.current) {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
@@ -111,11 +109,13 @@ export default function RightPanel({
   }, []);
 
   useEffect(() => {
-    if (selectedCamera) onSelectDevice(selectedCamera);
+    if (selectedCamera) {
+      // call parent handler to actually select device (Meeting.jsx will call selectDevice(deviceId, quality))
+      onSelectDevice(selectedCamera);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCamera]);
 
-  // When parent provides new chatMessages, remove any pending local messages
   useEffect(() => {
     if (!chatMessages || chatMessages.length === 0) {
       setLocalPending([]);
@@ -128,7 +128,7 @@ export default function RightPanel({
             if (pending._localId && cm._localId && pending._localId === cm._localId) return true;
             const sameType = cm.type === pending.type;
             const sameText = (pending.text && cm.text && cm.text === pending.text) || (pending.name && cm.name && cm.name === pending.name);
-            const timeClose = Math.abs((cm.time || 0) - (pending.time || 0)) < 5000; // 5s tolerance
+            const timeClose = Math.abs((cm.time || 0) - (pending.time || 0)) < 5000;
             return sameType && sameText && timeClose;
           } catch (e) {
             return false;
@@ -139,10 +139,8 @@ export default function RightPanel({
     );
   }, [chatMessages]);
 
-  // create combined list for rendering: server messages first, then pending
   const combinedMessages = (chatMessages || []).concat(localPending);
 
-  // Updated submit: create a normalized message object and optimistically add to localPending
   const submitChat = (e) => {
     e && e.preventDefault();
     const trimmed = (text || "").trim();
@@ -156,10 +154,8 @@ export default function RightPanel({
       _localId: `local-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
     };
 
-    // show instantly
     setLocalPending(prev => [...prev, payload]);
 
-    // send to parent (parent should forward to server). parent can also strip/transform if needed.
     try {
       onSendChat(payload);
     } catch (err) {
@@ -169,7 +165,6 @@ export default function RightPanel({
     setText("");
   };
 
-  // insert emoji at cursor / append
   const insertEmoji = (emoji) => {
     setText(prev => {
       const input = document.querySelector(".chat-input input[aria-label]");
@@ -188,7 +183,6 @@ export default function RightPanel({
     setEmojiOpen(false);
   };
 
-  // file attach handler
   const onFileSelected = (ev) => {
     const file = ev.target.files && ev.target.files[0];
     if (!file) return;
@@ -212,7 +206,6 @@ export default function RightPanel({
     ev.target.value = "";
   };
 
-  // voice recording logic
   const startRecording = async () => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       alert("Recording not supported in this browser");
@@ -242,11 +235,11 @@ export default function RightPanel({
         setLocalPending(prev => [...prev, payload]);
         onSendChat(payload);
         try { stream.getTracks().forEach(t=>t.stop()); } catch(_) {}
-        setIsRecording(false);
+        setIsRecordingVoice(false);
         setRecordStartAt(null);
       };
       mr.start();
-      setIsRecording(true);
+      setIsRecordingVoice(true);
       setRecordStartAt(Date.now());
     } catch (e) {
       console.warn("startRecording failed", e);
@@ -262,7 +255,6 @@ export default function RightPanel({
     } catch (e) {}
   };
 
-  // render a chat message block
   const renderMessage = (m, i) => {
     const msg = typeof m === "string" ? { type: "text", text: m, from: "Someone", time: Date.now() } : m;
     const isMe = (msg.from === mySocketId || msg.from === "You");
@@ -282,7 +274,6 @@ export default function RightPanel({
             <span style={{ marginLeft: 8, fontSize: 12, color: "#9fb3c8" }}>{timeAgo(msg.time)}</span>
           </div>
 
-          {/* content */}
           {msg.type === "text" && (
             <div className="bubble">{msg.text}</div>
           )}
@@ -330,19 +321,26 @@ export default function RightPanel({
     );
   };
 
-  // send an emoji-only click (convenience)
   const sendEmojiQuick = (emoji) => {
     const payload = { type: "text", text: emoji, from: mySocketId || "You", time: Date.now(), _localId: `local-${Date.now()}-${Math.random().toString(36).slice(2,7)}` };
     setLocalPending(prev => [...prev, payload]);
     onSendChat(payload);
   };
 
+  // Camera quality options
+  const QUALITY_OPTIONS = [
+    { value: "auto", label: "Auto" },
+    { value: "4k", label: "4K (3840×2160)" },
+    { value: "1080p", label: "1080p (1920×1080)" },
+    { value: "720p", label: "720p (1280×720)" },
+  ];
+
   return (
     <aside
       className={`right-panel sidebar ${open ? "open" : ""}`}
       role="complementary"
       aria-label="Right panel"
-      style={{ overflowX: "hidden" }} // prevent side scroll on panel root
+      style={{ overflowX: "hidden" }}
     >
       <div className="rp-header">
         <div className="rp-title">
@@ -351,7 +349,6 @@ export default function RightPanel({
             <button className={`rp-tab ${tab === "chat" ? "active" : ""}`} onClick={() => setTab("chat")}>Chat</button>
             <button className={`rp-tab ${tab === "people" ? "active" : ""}`} onClick={() => setTab("people")}>People</button>
             <button className={`rp-tab ${tab === "settings" ? "active" : ""}`} onClick={() => setTab("settings")}>Settings</button>
-            {/* NEW Meeting info tab */}
             <button className={`rp-tab ${tab === "meeting" ? "active" : ""}`} onClick={() => setTab("meeting")}>Meeting info</button>
           </div>
         </div>
@@ -364,7 +361,6 @@ export default function RightPanel({
       <div className="right-panel-body">
         {tab === "chat" && (
           <div className="chat-tab">
-            {/* chat-messages: ensure no horizontal scroll, vertical scroll only */}
             <div
               className="chat-messages"
               ref={messagesRef}
@@ -392,15 +388,14 @@ export default function RightPanel({
                 placeholder="Type a message"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                style={{ flex: 1, minWidth: 0 }} // minWidth:0 avoids input causing overflow
+                style={{ flex: 1, minWidth: 0 }}
               />
 
               <input type="file" ref={fileInputRef} style={{ display: "none" }} onChange={onFileSelected} />
 
               <button type="button" className="tool-btn" onClick={() => fileInputRef.current && fileInputRef.current.click()} title="Attach file">📎</button>
 
-              {/* voice record toggle */}
-              {!isRecording ? (
+              {!isRecordingVoice ? (
                 <button type="button" className="tool-btn" onClick={startRecording} title="Record voice">🎙️</button>
               ) : (
                 <button type="button" className="tool-btn danger" onClick={stopRecording} title="Stop recording">⏹️</button>
@@ -458,20 +453,29 @@ export default function RightPanel({
               </div>
             </div>
 
+            {/* Meeting features section: removed checkboxes, added camera quality selector */}
             <div className="right-panel-section" style={{ marginTop: 12 }}>
               <h4>Meeting features</h4>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <input type="checkbox" checked={recording} onChange={(e) => { setRecording(e.target.checked); onToggleRecord(e.target.checked); }} />
-                  Record meeting
-                </label>
 
-                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <input type="checkbox" checked={livecc} onChange={(e) => { setLivecc(e.target.checked); onToggleLiveCC(e.target.checked); }} />
-                  Live captions
-                </label>
+              <div style={{ marginTop: 8 }}>
+                <label style={{ display: "block", marginBottom: 6 }}>Camera quality</label>
+                <select
+                  value={currentResolution || "auto"}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    onChangeResolution(val); // parent (Meeting.jsx) will re-acquire media at this quality
+                  }}
+                  style={{ padding: 8, width: "100%", borderRadius: 6 }}
+                >
+                  {QUALITY_OPTIONS.map(q => <option key={q.value} value={q.value}>{q.label}</option>)}
+                </select>
+
+                <div style={{ marginTop: 10, fontSize: 13, opacity: 0.9 }}>
+                  The system will attempt to acquire the selected camera resolution. If the device cannot provide it, browser will choose the nearest available resolution.
+                </div>
               </div>
-              <div style={{ fontSize: 13, opacity: 0.9, marginTop: 8 }}>Record and Live CC toggles are UI-level controls — wire to your backend / transcription service to persist & function.</div>
+
+              <div style={{ fontSize: 13, opacity: 0.9, marginTop: 8 }}>Start Recording and Live Captions are available from the More menu (top-right). This panel only controls local devices & camera quality.</div>
             </div>
 
             <div className="right-panel-section" style={{ marginTop: 12 }}>
@@ -485,7 +489,6 @@ export default function RightPanel({
           </div>
         )}
 
-        {/* NEW: Meeting info tab content */}
         {tab === "meeting" && (
           <div className="meeting-info-tab" style={{ padding: 8, display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
