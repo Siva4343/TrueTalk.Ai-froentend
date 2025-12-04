@@ -1,4 +1,3 @@
-// src/hooks/useWebRTC.js
 import { useEffect, useRef, useState, useCallback } from "react";
 
 const DEFAULT_STUN = [{ urls: "stun:stun.l.google.com:19302" }];
@@ -6,8 +5,8 @@ const DEFAULT_STUN = [{ urls: "stun:stun.l.google.com:19302" }];
 export default function useWebRTC(signalingUrl = null) {
   const wsRef = useRef(null);
   const localVideoElRef = useRef(null); // DOM Video element for the local preview
-  const mediaStreamRef = useRef(null);  // MediaStream
-  const peersRef = useRef(new Map());   // peerId -> { pc, stream, candidatesQueue, name, muted }
+  const mediaStreamRef = useRef(null); // MediaStream
+  const peersRef = useRef(new Map()); // peerId -> { pc, stream, candidatesQueue, name, muted, dataChannel }
   const [remoteStreams, setRemoteStreams] = useState([]); // [{ socketId, stream, name, muted }]
   const [participants, setParticipants] = useState([]);
   const handlersRef = useRef(new Map());
@@ -50,7 +49,15 @@ export default function useWebRTC(signalingUrl = null) {
     if (peersRef.current.has(remoteId)) return peersRef.current.get(remoteId);
 
     const pc = new RTCPeerConnection({ iceServers: DEFAULT_STUN });
-    const info = { pc, stream: null, candidatesQueue: [], name: opts.name || null, muted: false, isHost: !!opts.isHost };
+    const info = {
+      pc,
+      stream: null,
+      candidatesQueue: [],
+      name: opts.name || null,
+      muted: false,
+      isHost: !!opts.isHost,
+      dataChannel: null, // will hold DataChannel object
+    };
 
     const remoteStream = new MediaStream();
     pc.ontrack = (ev) => {
@@ -65,6 +72,29 @@ export default function useWebRTC(signalingUrl = null) {
       info.stream = remoteStream;
       peersRef.current.set(remoteId, info);
       refreshRemoteStreams();
+    };
+
+    // Listen for data channels created by remote peer
+    pc.ondatachannel = (ev) => {
+      try {
+        const ch = ev.channel;
+        if (ch && ch.label === "captions") {
+          info.dataChannel = ch;
+          ch.onopen = () => {
+            emit("dc-open", { peer: remoteId });
+          };
+          ch.onmessage = (mEv) => {
+            try {
+              const data = typeof mEv.data === "string" ? JSON.parse(mEv.data) : mEv.data;
+              emit("dc-message", { from: remoteId, data });
+            } catch (e) { console.warn("dc onmessage parse failed", e); }
+          };
+          ch.onclose = () => {
+            emit("dc-closed", { peer: remoteId });
+            info.dataChannel = null;
+          };
+        }
+      } catch (e) { console.warn("ondatachannel err", e); }
     };
 
     pc.onicecandidate = (evt) => {
@@ -99,12 +129,66 @@ export default function useWebRTC(signalingUrl = null) {
     sendRaw({ type: "signal", to, from: myIdRef.current, signal });
   }
 
+  // DataChannel helpers: send caption to a single peer (fallback to websocket)
+  function sendCaptionToPeer(peerId, payload) {
+    try {
+      const info = peersRef.current.get(peerId);
+      if (!info) return false;
+      const ch = info.dataChannel;
+      if (ch && ch.readyState === "open") {
+        ch.send(JSON.stringify(payload));
+        return true;
+      }
+    } catch (e) { console.warn("sendCaptionToPeer failed", e); }
+    return false;
+  }
+
+  // send to all connected peers (returns number of successful sends)
+  function sendCaptionToAll(payload) {
+    let sent = 0;
+    for (const [peerId, info] of peersRef.current.entries()) {
+      try {
+        const ch = info.dataChannel;
+        if (ch && ch.readyState === "open") {
+          ch.send(JSON.stringify(payload));
+          sent++;
+        }
+      } catch (e) {
+        console.warn("sendCaptionToAll failed for", peerId, e);
+      }
+    }
+    return sent;
+  }
+
   async function makeOffer(remoteId) {
     const info = createPeerConnection(remoteId);
     const pc = info.pc;
     if (mediaStreamRef.current) {
       try { mediaStreamRef.current.getTracks().forEach(t => pc.addTrack(t, mediaStreamRef.current)); } catch(_) {}
     }
+
+    // Create a DataChannel for captions (only on offerer side)
+    try {
+      const existing = info.dataChannel;
+      if (!existing) {
+        const dc = pc.createDataChannel("captions", { ordered: true });
+        info.dataChannel = dc;
+        dc.onopen = () => emit("dc-open", { peer: remoteId });
+        dc.onmessage = (ev) => {
+          try {
+            const data = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
+            emit("dc-message", { from: remoteId, data });
+          } catch (e) { console.warn("dc onmessage parse", e); }
+        };
+        dc.onclose = () => {
+          emit("dc-closed", { peer: remoteId });
+          info.dataChannel = null;
+        };
+      }
+    } catch (e) {
+      console.warn("create datachannel failed", e);
+    }
+
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -306,14 +390,53 @@ export default function useWebRTC(signalingUrl = null) {
   }
 
   async function connect({ roomId, name } = {}) {
-    const url = signalingUrl || (() => {
+    const builtUrl = (() => {
+      if (signalingUrl) {
+        try {
+          const s = String(signalingUrl);
+          if (s.includes("{roomId}")) {
+            return s.replace("{roomId}", roomId);
+          }
+          if (s.startsWith("ws://") || s.startsWith("wss://")) {
+            if (s.includes("/ws")) {
+              return s;
+            }
+            return `${s.replace(/\/$/, "")}/ws/meet/${roomId}/`;
+          }
+          if (/^[^/]+(:\d+)?$/.test(s)) {
+            const proto = window.location.protocol === "https:" ? "wss" : "ws";
+            return `${proto}://${s.replace(/\/$/, "")}/ws/meet/${roomId}/`;
+          }
+          return s;
+        } catch (e) {
+          console.warn("signalingUrl parse failed, falling back", e);
+        }
+      }
+
+      try {
+        const backendHost = (import.meta && import.meta.env && import.meta.env.VITE_BACKEND_HOST) || null;
+        const backendPort = (import.meta && import.meta.env && import.meta.env.VITE_BACKEND_PORT) || null;
+        if (backendHost) {
+          const proto = window.location.protocol === "https:" ? "wss" : "ws";
+          const hostPort = backendPort ? `${backendHost}:${backendPort}` : backendHost;
+          return `${proto}://${hostPort}/ws/meet/${roomId}/`;
+        }
+      } catch (e) {}
+
       const loc = window.location;
       const proto = loc.protocol === "https:" ? "wss" : "ws";
       return `${proto}://${loc.host}/ws/meet/${roomId}/`;
     })();
 
+    const url = builtUrl;
+
     if (!(wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) {
-      wsRef.current = new WebSocket(url);
+      try {
+        wsRef.current = new WebSocket(url);
+      } catch (e) {
+        console.warn("WebSocket ctor failed", e);
+        throw e;
+      }
     }
 
     roomRef.current = roomId || roomRef.current;
@@ -321,7 +444,6 @@ export default function useWebRTC(signalingUrl = null) {
 
     const ws = wsRef.current;
 
-    // IMPORTANT: backend expects an "introduce" message with payload { name, roomId }
     ws.onopen = () => {
       try {
         sendRaw({ type: "introduce", payload: { name: nameRef.current, roomId: roomRef.current } });
@@ -336,7 +458,6 @@ export default function useWebRTC(signalingUrl = null) {
         const msg = JSON.parse(ev.data || "{}");
         const payload = msg.payload || {};
 
-        // assign-id (backend sends payload.id)
         if (msg.type === "assign-id") {
           const id = payload.id || msg.id || null;
           myIdRef.current = id;
@@ -344,7 +465,6 @@ export default function useWebRTC(signalingUrl = null) {
           return;
         }
 
-        // participants list broadcast
         if (msg.type === "participants") {
           const list = msg.participants || payload.participants || msg.list || [];
           setParticipants(list);
@@ -361,7 +481,6 @@ export default function useWebRTC(signalingUrl = null) {
           return;
         }
 
-        // signal messages (server may wrap under type 'signal' or send direct offers/answers)
         if (msg.type === "signal" || (msg.type === "signal-message")) {
           const from = msg.from || payload.from;
           const signal = msg.signal || payload.signal || payload;
@@ -372,7 +491,6 @@ export default function useWebRTC(signalingUrl = null) {
           return;
         }
 
-        // Some backends may forward offers/answers/candidates under explicit types - handle those too:
         if (msg.type === "offer" || msg.type === "answer" || msg.type === "ice-candidate" || msg.type === "candidate") {
           const from = msg.from || payload.from;
           const sig = payload || msg;
@@ -382,19 +500,16 @@ export default function useWebRTC(signalingUrl = null) {
           return;
         }
 
-        // chat-message (including caption payloads)
         if (msg.type === "chat-message") {
           emit("chat-message", payload || msg.payload || {});
           return;
         }
 
-        // host-command, reaction etc
         if (msg.type === "host-command") {
           emit("host-command", payload || msg.payload || {});
           return;
         }
 
-        // fallback: emit the message type with payload
         emit(msg.type, payload || msg);
       } catch (e) {
         console.warn("ws onmessage parse", e);
@@ -450,12 +565,15 @@ export default function useWebRTC(signalingUrl = null) {
     remoteStreams,
     participants,
     on,
-    sendChatMessage,
+    sendChatMessage, // still available for non-caption chat
     sendHostCommand,
     toggleCam,
     toggleMic,
     startScreenShare,
     stopScreenShare,
     selectDevice,
+    // DataChannel caption helpers exposed for UI layer
+    sendCaptionToPeer,
+    sendCaptionToAll,
   };
 }

@@ -1,3 +1,4 @@
+// src/pages/Meeting.jsx
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import useWebRTC from "../hooks/useWebRTC";
 import Toolbar from "../components/Toolbar";
@@ -6,6 +7,7 @@ import VideoGrid from "../components/VideoGrid";
 import InviteModal from "../components/InviteModal";
 import LiveCaptionBar from "../components/LiveCaptionBar";
 import "../styles/meeting.css";
+import "../styles/live-caption.css"; // ensure filename matches your file
 
 export default function MeetingPage() {
   const qs = new URLSearchParams(window.location.search);
@@ -29,11 +31,12 @@ export default function MeetingPage() {
     toggleMic,
     startScreenShare,
     stopScreenShare,
-    selectDevice
+    selectDevice,
+    // DataChannel helper exposed by hook
+    sendCaptionToAll,
   } = useWebRTC();
 
   // UI state
-  const localPreviewRef = useRef(null);
   const [mySocketId, setMySocketId] = useState(null);
   const [isHost, setIsHost] = useState(false);
   const [pinnedId, setPinnedId] = useState(null);
@@ -49,13 +52,15 @@ export default function MeetingPage() {
   const [liveCcEnabled, setLiveCcEnabled] = useState(false);
   const [liveCcLang, setLiveCcLang] = useState("en-US");
   const speechRef = useRef(null);
-  const [captions, setCaptions] = useState([]); // items have { text, from, time, __final }
+  const [captions, setCaptions] = useState([]); // items have { id?, text, from, time, __final }
+  // dedupe between DC and WS
+  const lastCaptionFromRef = useRef({ from: null, text: null, time: 0 });
 
-  // ---- NEW: native cam/mic state (driven by local media stream)
+  // native cam/mic state
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
 
-  // REAL Recording state - REPLACED with actual recording functionality
+  // Recording state
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [recordedChunks, setRecordedChunks] = useState([]);
   const [recordedBlob, setRecordedBlob] = useState(null);
@@ -66,7 +71,7 @@ export default function MeetingPage() {
   const [recordingStartedBy, setRecordingStartedBy] = useState(null);
   const [lastRecordingUrl, setLastRecordingUrl] = useState(null);
 
-  // Some small helpers / defaults (so the file is self-contained)
+  // helpers
   const hostLocked = false;
   const hostName = name || "Host";
 
@@ -95,280 +100,184 @@ export default function MeetingPage() {
     return () => clearInterval(interval);
   }, [isRecording, recordingStartTime]);
 
-  // REAL Recording handler - REPLACED with actual recording functionality
+  // --- Recording helpers (unchanged from your code) ---
+  const ensureLocalStream = async () => {
+    try {
+      if (mediaStreamRef && mediaStreamRef.current) return mediaStreamRef.current;
+      if (typeof startLocalMedia === "function") {
+        try {
+          const s = await startLocalMedia({ video: true, audio: true }).catch(()=>null);
+          if (s) {
+            if (mediaStreamRef && !mediaStreamRef.current) mediaStreamRef.current = s;
+            return s;
+          }
+        } catch (_) {}
+      }
+      if (navigator.mediaDevices?.getUserMedia) {
+        const s2 = await navigator.mediaDevices.getUserMedia({ video: true, audio: true }).catch(()=>null);
+        if (s2) {
+          if (mediaStreamRef && !mediaStreamRef.current) mediaStreamRef.current = s2;
+          return s2;
+        }
+      }
+      return null;
+    } catch (e) {
+      console.warn("ensureLocalStream failed", e);
+      return null;
+    }
+  };
+
   const handleStartRecording = async () => {
     try {
-      console.log("🟢 Starting recording...");
-      
-      // Get the media stream from your camera
-      const stream = mediaStreamRef.current;
-      
-      if (!stream) {
-        alert("❌ No media stream available for recording. Please make sure your camera is enabled.");
-        return;
-      }
-
-      console.log("📹 Media stream obtained:", stream.getTracks().map(t => t.kind));
-
-      // Check if MediaRecorder is supported
-      if (typeof MediaRecorder === 'undefined') {
-        alert("❌ Recording not supported in this browser. Please use Chrome, Firefox, or Edge.");
-        return;
-      }
-
-      // Try different MIME types for compatibility
-      let options = { mimeType: 'video/webm;codecs=vp9,opus' };
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-        options = { mimeType: 'video/webm;codecs=vp8,opus' };
-      }
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-        options = { mimeType: 'video/webm' };
-      }
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-        options = {}; // Let browser choose default
-      }
-
-      console.log("🎬 Using MIME type:", options.mimeType || 'browser-default');
-
-      const recorder = new MediaRecorder(stream, options);
-      const chunks = [];
-
-      // Handle data available event
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          chunks.push(event.data);
-          console.log("📦 Recording chunk:", event.data.size, "bytes");
-        }
-      };
-
-      // Handle recording stop - THIS IS WHERE THE DOWNLOAD HAPPENS
-      recorder.onstop = () => {
-        console.log("🛑 Recording stopped, processing data...");
-        
-        if (chunks.length === 0) {
-          console.warn("⚠️ No recording data captured");
-          alert("No recording data was captured. Please try again.");
+      if (!mediaStreamRef || !mediaStreamRef.current) {
+        const got = await ensureLocalStream();
+        if (!got) {
+          setError("No local media stream available for recording.");
           return;
+        } else {
+          try {
+            if (localVideoElRef && localVideoElRef.current) {
+              localVideoElRef.current.srcObject = got;
+              localVideoElRef.current.muted = true;
+              localVideoElRef.current.play && localVideoElRef.current.play().catch(()=>{});
+            }
+          } catch (_) {}
         }
+      }
 
-        // Create the final video blob
-        const blob = new Blob(chunks, { type: 'video/webm' });
-        const url = URL.createObjectURL(blob);
-        
-        console.log("🎉 Recording completed:", {
-          size: blob.size,
-          type: blob.type,
-          chunks: chunks.length
-        });
+      const possibleTypes = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm;codecs=h264,opus',
+        'video/webm',
+        'video/mp4'
+      ];
+      let mimeType = "";
+      for (const t of possibleTypes) {
+        if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) {
+          mimeType = t;
+          break;
+        }
+      }
+      const opts = mimeType ? { mimeType } : {};
 
-        // Store the recording for preview/download
+      const mr = new MediaRecorder(mediaStreamRef.current, opts);
+      const chunks = [];
+      mr.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) {
+          chunks.push(ev.data);
+        }
+      };
+      mr.onstart = () => {
+        setRecordedChunks([]);
+        setIsRecording(true);
+        setRecordingStartTime(Date.now());
+        setRecordingStartedBy(name || "You");
+        setChatMessages(prev => [...prev, { type: "system", text: `🔴 Recording started by ${name}`, time: Date.now(), _localId: `recording-start-${Date.now()}` }]);
+        sendHostCommand && sendHostCommand(roomId, { type: "record-toggle", enabled: true, startTime: Date.now(), startedBy: name });
+      };
+      mr.onstop = () => {
+        const blob = new Blob(chunks, { type: mr.mimeType || "video/webm" });
         setRecordedBlob(blob);
-        setRecordedUrl(url);
-        setRecordedChunks(chunks);
-        setLastRecordingUrl(url);
+        setRecordedChunks(chunks.slice());
+        try {
+          const url = URL.createObjectURL(blob);
+          setLastRecordingUrl(url);
+          setRecordedUrl(url);
+        } catch (e) { console.warn("createObjectURL failed:", e); }
+        setIsRecording(false);
+        const duration = recordingTime || Math.round((Date.now() - (recordingStartTime || Date.now())) / 1000);
+        setRecordingStartTime(null);
+        setRecordingStartedBy(null);
+        setChatMessages(prev => [...prev, { type: "system", text: `⏹️ Recording stopped. Duration: ${formatRecordingTime(duration)}. File saved.`, time: Date.now(), _localId: `recording-stop-${Date.now()}` }]);
+        sendHostCommand && sendHostCommand(roomId, { type: "record-toggle", enabled: false, duration, stoppedBy: name });
 
-        // AUTO-DOWNLOAD THE RECORDING
-        const timestamp = new Date().toISOString()
-          .replace(/[:.]/g, '-')
-          .replace('T', '_')
-          .split('Z')[0];
-        
-        const filename = `meeting-recording-${roomId}-${timestamp}.webm`;
-        
-        console.log("📥 Auto-downloading recording:", filename);
-        
-        // Create download link and trigger download
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.style.display = 'none';
-        
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        
-        // Clean up URL object after download
-        setTimeout(() => {
-          URL.revokeObjectURL(url);
-          console.log("🧹 Cleaned up recording URL");
-        }, 1000);
-
-        // Show success message
-        const downloadMessage = {
-          type: "system",
-          text: `📥 Recording downloaded automatically (${formatFileSize(blob.size)})`,
-          time: Date.now(),
-          _localId: `download-${Date.now()}`
-        };
-        setChatMessages(prev => [...prev, downloadMessage]);
+        try {
+          const a = document.createElement("a");
+          a.style.display = "none";
+          a.href = URL.createObjectURL(blob);
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T','_').split('Z')[0];
+          a.download = `meeting-recording-${roomId}-${timestamp}.webm`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } catch (e) {}
       };
 
-      // Handle recording errors
-      recorder.onerror = (event) => {
-        console.error("❌ MediaRecorder error:", event);
-        alert(`Recording error: ${event.error?.message || 'Unknown error'}`);
+      mr.start();
+      setMediaRecorder(mr);
+    } catch (err) {
+      console.error("start recording err", err);
+      setError("Recording failed to start. See console for details.");
+    }
+  };
+
+  const handleStopRecording = () => {
+    try {
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      } else {
         setIsRecording(false);
         setRecordingStartTime(null);
-      };
-
-      // Start recording with 1-second chunks for better performance
-      recorder.start(1000);
-      console.log("🎥 Recording started successfully");
-      
-      setMediaRecorder(recorder);
-      setIsRecording(true);
-      setRecordingStartTime(Date.now());
-      setRecordingStartedBy(name);
-      setRecordedChunks([]);
-
-      // Send notification to other participants
-      sendHostCommand && sendHostCommand(roomId, { 
-        type: "record-toggle", 
-        enabled: true,
-        startTime: Date.now(),
-        startedBy: name,
-        startedById: mySocketId
-      });
-
-      const recordingMessage = {
-        type: "system",
-        text: `🔴 Recording started by ${name}`,
-        time: Date.now(),
-        _localId: `recording-start-${Date.now()}`
-      };
-      setChatMessages(prev => [...prev, recordingMessage]);
-
-    } catch (error) {
-      console.error("❌ Error starting recording:", error);
-      alert(`Recording failed to start: ${error.message}`);
-      setIsRecording(false);
-      setRecordingStartTime(null);
+        setRecordingStartedBy(null);
+        sendHostCommand && sendHostCommand(roomId, { type: "record-toggle", enabled: false, duration: recordingTime, stoppedBy: name });
+      }
+    } catch (e) {
+      console.warn("stop recording failed", e);
     }
   };
 
-  // REAL Stop recording handler - REPLACED with actual recording functionality
-  const handleStopRecording = () => {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      console.log("🛑 Stopping recording...");
-      mediaRecorder.stop();
-    } else {
-      console.warn("⚠️ No active recording to stop");
-    }
-    
-    const duration = recordingTime;
-    setIsRecording(false);
-    setRecordingStartTime(null);
-    setRecordingStartedBy(null);
-
-    // Send stop notification to other participants
-    sendHostCommand && sendHostCommand(roomId, { 
-      type: "record-toggle", 
-      enabled: false,
-      duration: duration,
-      stoppedBy: name
-    });
-
-    const recordingMessage = {
-      type: "system",
-      text: `⏹️ Recording stopped. Duration: ${formatRecordingTime(duration)}. File is downloading...`,
-      time: Date.now(),
-      _localId: `recording-stop-${Date.now()}`
-    };
-    setChatMessages(prev => [...prev, recordingMessage]);
-  };
-
-  // Manual download function (in case auto-download fails)
   const handleDownloadRecording = () => {
     if (!recordedBlob && !lastRecordingUrl) {
       alert("No recording available to download. Please start and stop a recording first.");
       return;
     }
-
-    const timestamp = new Date().toISOString()
-      .replace(/[:.]/g, '-')
-      .replace('T', '_')
-      .split('Z')[0];
-    
+    const url = lastRecordingUrl || URL.createObjectURL(recordedBlob);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T','_').split('Z')[0];
     const filename = `meeting-recording-${roomId}-${timestamp}.webm`;
-    
-    // Use the last recording URL if available, otherwise create new one
-    const downloadUrl = lastRecordingUrl || URL.createObjectURL(recordedBlob);
-    
-    const a = document.createElement('a');
-    a.href = downloadUrl;
+    const a = document.createElement("a");
+    a.href = url;
     a.download = filename;
     a.style.display = 'none';
-    
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    
-    // Show download confirmation
-    const downloadMessage = {
-      type: "system",
-      text: `📥 Recording re-downloaded by ${name}`,
-      time: Date.now(),
-      _localId: `download-${Date.now()}`
-    };
-    setChatMessages(prev => [...prev, downloadMessage]);
+    setChatMessages(prev => [...prev, { type: "system", text: `📥 Recording re-downloaded by ${name}`, time: Date.now(), _localId: `download-${Date.now()}` }]);
   };
 
-  // Helper function to format file size
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const sizes = ['Bytes','KB','MB','GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return parseFloat((bytes / Math.pow(k,i)).toFixed(2)) + ' ' + sizes[i];
   };
-
-  // Helper function to format recording time
   const formatRecordingTime = (seconds) => {
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     const s = Math.floor(seconds % 60);
-    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
   };
 
-  // ---- helper: normalize server messages into the UI shape RightPanel expects
+  // normalize server messages unchanged
   const normalizeMessageFromServer = (m) => {
     if (!m) return null;
-    // if server already uses the UI shape, keep fields
     const base = {
       type: m.type || m.messageType || "text",
       from: m.from || m.sender || m.name || m.user || "Someone",
       time: m.time || m.ts || Date.now(),
       _localId: m._localId || m._id || m.id || undefined,
     };
-
     if (base.type === "file") {
-      return {
-        ...base,
-        name: m.name || m.filename || m.fileName,
-        mime: m.mime || m.fileType,
-        dataUrl: m.dataUrl || m.url || m.fileUrl || m.link,
-        size: m.size || m.fileSize,
-      };
+      return {...base, name: m.name || m.filename || m.fileName, mime: m.mime || m.fileType, dataUrl: m.dataUrl || m.url || m.fileUrl || m.link, size: m.size || m.fileSize };
     }
-
     if (base.type === "audio") {
-      return {
-        ...base,
-        url: m.url || m.audioUrl || m.dataUrl,
-        duration: m.duration,
-        size: m.size,
-      };
+      return {...base, url: m.url || m.audioUrl || m.dataUrl, duration: m.duration, size: m.size };
     }
-
-    // treat 'user' or other legacy types as text
-    return {
-      ...base,
-      type: "text",
-      text: m.text || m.message || m.body || (typeof m === "string" ? m : ""),
-    };
+    return {...base, type: "text", text: m.text || m.message || m.body || (typeof m === "string" ? m : "") };
   };
 
-  /* Setup event listeners for signaling events (handles translated captions) */
+  /* Setup event listeners for signaling events (handles captions & commands) */
   useEffect(() => {
     if (!on) return;
 
@@ -376,8 +285,9 @@ export default function MeetingPage() {
 
     const offParts = on("participants", (list) => {
       if (!Array.isArray(list)) return;
-      const host = list.find(p => p.isHost) || list[0];
-      setIsHost(!!(host && host.socketId === mySocketId));
+      setParticipants(list);
+      const first = (list && list.length) ? list[0] : null;
+      setIsHost(!!(first && first.socketId && first.socketId === mySocketId));
     });
 
     const offHost = on("host-command", (c) => {
@@ -407,94 +317,139 @@ export default function MeetingPage() {
         try { disconnect(); } catch (_) {}
         window.location.href = "/";
       }
-      // Handle recording commands from any user
       if (c.type === "record-toggle") {
         if (c.enabled && !isRecording) {
           setIsRecording(true);
           setRecordingStartTime(c.startTime || Date.now());
           setRecordingStartedBy(c.startedBy || "Someone");
-          // Show recording started message for all participants
-          const recordingMessage = {
-            type: "system",
-            text: `🔴 Recording started by ${c.startedBy || "a participant"}`,
-            time: Date.now(),
-            _localId: `recording-start-${Date.now()}`
-          };
-          setChatMessages(prev => [...prev, recordingMessage]);
+          setChatMessages(prev => [...prev, { type: "system", text: `🔴 Recording started by ${c.startedBy || "a participant"}`, time: Date.now(), _localId: `recording-start-${Date.now()}` }]);
         } else if (!c.enabled && isRecording) {
           setIsRecording(false);
           const duration = c.duration || recordingTime;
           setRecordingStartTime(null);
           setRecordingStartedBy(null);
-          // Show recording stopped message for all participants
-          const recordingMessage = {
-            type: "system",
-            text: `⏹️ Recording stopped by ${c.stoppedBy || "a participant"}. Duration: ${formatRecordingTime(duration)}`,
-            time: Date.now(),
-            _localId: `recording-stop-${Date.now()}`
-          };
-          setChatMessages(prev => [...prev, recordingMessage]);
+          setChatMessages(prev => [...prev, { type: "system", text: `⏹️ Recording stopped by ${c.stoppedBy || "a participant"}. Duration: ${formatRecordingTime(duration)}`, time: Date.now(), _localId: `recording-stop-${Date.now()}` }]);
         }
       }
     });
 
-    // Chat + caption handler
+    // chat-message (from server) - server does translations for captions
     const offChat = on("chat-message", (m) => {
       if (!m) return;
-
-      // If it's a caption object (backend sends payload.type === 'caption')
       if (m && m.type === "caption") {
-        // map user selected lang (e.g. "hi-IN") to short code "hi"
+        // When the server sends caption messages (with translations) we display according to selected lang
         const langShort = (liveCcLang || "en-US").split("-")[0];
-
         const translations = m.translations || {};
         let showText = m.text || "";
+        if (langShort && translations && translations[langShort]) showText = translations[langShort];
 
-        if (langShort === "hi" && translations.hi) showText = translations.hi;
-        else if (langShort === "te" && translations.te) showText = translations.te;
-        else if (langShort === "ta" && translations.ta) showText = translations.ta;
-        else if (langShort === "kn" && translations.kn) showText = translations.kn;
-        else if (langShort === "ml" && translations.ml) showText = translations.ml;
-        else if (langShort === "mr" && translations.mr) showText = translations.mr;
-        else if (langShort === "gu" && translations.gu) showText = translations.gu;
-        else if (langShort === "bn" && translations.bn) showText = translations.bn;
-        else if (langShort === "pa" && translations.pa) showText = translations.pa;
-        else if (langShort === "or" && translations.or) showText = translations.or;
-        // else for english variants show original m.text
+        const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
 
         setCaptions(prev => {
           const p = prev.slice();
-          const text = showText;
           const from = m.from || "Someone";
           const time = m.time || Date.now();
           const isFinal = !!m.isFinal;
+          const text = (showText || "").trim();
+
+          // dedupe: if recently received same caption from same source (likely DC -> WS duplication) skip
+          const last = lastCaptionFromRef.current;
+          if (last.from === from && last.text === text && Math.abs((time || 0) - (last.time || 0)) < 3000) {
+            // skip duplicate
+            return p;
+          }
+          // update last seen (server path)
+          lastCaptionFromRef.current = { from, text, time };
+
+          if (!text) return p;
 
           if (isFinal) {
-            if (p.length && p[p.length - 1] && !p[p.length - 1].__final) {
-              p[p.length - 1] = { text, from, time, __final: true };
-            } else {
-              p.push({ text, from, time, __final: true });
+            p.push({ id: makeId(), text, from, time, __final: true });
+            // remove previous interim for same speaker
+            for (let i = p.length - 2; i >= 0; i--) {
+              if (!p[i].__final && p[i].from === from) {
+                p.splice(i, 1);
+                break;
+              }
             }
           } else {
-            if (p.length && p[p.length - 1] && !p[p.length - 1].__final) {
-              p[p.length - 1] = { ...p[p.length - 1], text, time, __final: false };
-            } else {
-              p.push({ text, from, time, __final: false });
+            // interim: replace or add
+            let replaced = false;
+            for (let i = p.length - 1; i >= 0; i--) {
+              const it = p[i];
+              if (!it.__final && it.from === from) {
+                p[i] = { ...it, text, time, from, __final: false };
+                replaced = true;
+                break;
+              }
             }
+            if (!replaced) p.push({ id: `i-${makeId()}`, text, from, time, __final: false });
           }
 
-          return p.slice(-50);
+          const MAX = 200;
+          if (p.length > MAX) return p.slice(p.length - MAX);
+          return p;
         });
 
         return;
       }
 
-      // fallback: non-caption chat messages
+      // non-caption chat
       setChatMessages(prev => [...prev, m]);
     });
 
-    return () => { offAssign(); offParts(); offHost(); offChat(); };
-  }, [on, mySocketId, isRecording, recordingTime]);
+    // DataChannel messages (peer captions via P2P)
+    const offDc = on("dc-message", ({ from, data }) => {
+      try {
+        if (!data) return;
+        if (data.type === "caption") {
+          const fromName = data.fromName || from || "Someone";
+          const text = (data.text || "").trim();
+          const isFinal = !!data.isFinal;
+          const time = data.time || Date.now();
+
+          // dedupe between DC and WS: skip if same as last seen (close in time)
+          const last = lastCaptionFromRef.current;
+          if (last.from === fromName && last.text === text && Math.abs((time || 0) - (last.time || 0)) < 3000) {
+            return;
+          }
+          lastCaptionFromRef.current = { from: fromName, text, time };
+
+          setCaptions(prev => {
+            const p = prev.slice();
+            if (isFinal) {
+              p.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`, text, from: fromName, time, __final: true });
+              // remove previous interim for same speaker
+              for (let i = p.length - 2; i >= 0; i--) {
+                if (!p[i].__final && p[i].from === fromName) {
+                  p.splice(i, 1);
+                  break;
+                }
+              }
+            } else {
+              // interim: replace or add
+              let replaced = false;
+              for (let i = p.length - 1; i >= 0; i--) {
+                const it = p[i];
+                if (!it.__final && it.from === fromName) {
+                  p[i] = { ...it, text, time, from: fromName, __final: false };
+                  replaced = true;
+                  break;
+                }
+              }
+              if (!replaced) p.push({ id: `i-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, text, from: fromName, time, __final: false });
+            }
+
+            const MAX = 200;
+            if (p.length > MAX) return p.slice(p.length - MAX);
+            return p;
+          });
+        }
+      } catch (e) { console.warn("dc-message handler err", e); }
+    });
+
+    return () => { offAssign(); offParts(); offHost(); offChat(); offDc(); };
+  }, [on, mySocketId, isRecording, recordingTime, liveCcLang, sendCaptionToAll, sendChatMessage]);
 
   /* Auto-start camera and connect */
   useEffect(() => {
@@ -516,38 +471,6 @@ export default function MeetingPage() {
     // eslint-disable-next-line
   }, [roomId]);
 
-  /* mount local preview element */
-  useEffect(() => {
-    function mount() {
-      const container = localPreviewRef.current;
-      if (!container) return;
-      while (container.firstChild) container.removeChild(container.firstChild);
-      const el = localVideoElRef && localVideoElRef.current ? localVideoElRef.current : null;
-      if (el) {
-        el.style.width = "100%"; el.style.height = "100%"; el.style.objectFit = "cover"; el.muted = true;
-        container.appendChild(el);
-        try { el.play && el.play().catch(()=>{}); } catch(_) {}
-        return;
-      }
-      if (mediaStreamRef && mediaStreamRef.current) {
-        const v = document.createElement("video");
-        v.autoplay = true; v.playsInline = true; v.muted = true;
-        v.srcObject = mediaStreamRef.current;
-        v.style.width = "100%"; v.style.height = "100%"; v.style.objectFit = "cover";
-        container.appendChild(v);
-        try { v.play && v.play().catch(()=>{}); } catch(_) {}
-        return;
-      }
-      const ph = document.createElement("div");
-      ph.style.width = "100%"; ph.style.height = "100%"; ph.style.background = "#111";
-      container.appendChild(ph);
-    }
-    mount();
-    const t1 = setTimeout(mount, 300);
-    const t2 = setTimeout(mount, 900);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [localVideoElRef && localVideoElRef.current, mediaStreamRef && mediaStreamRef.current]);
-
   /* ---------- Live captions (SpeechRecognition) ---------- */
   const startLiveCC = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -559,47 +482,83 @@ export default function MeetingPage() {
       r.continuous = true;
 
       r.onresult = (ev) => {
-        const lastIndex = ev.results.length - 1;
-        const lastResult = ev.results[lastIndex];
-        const text = (lastResult[0] && lastResult[0].transcript) ? lastResult[0].transcript.trim() : "";
-        const isFinal = !!lastResult.isFinal;
+        try {
+          const resultsArr = Array.from(ev.results || []);
+          const transcript = resultsArr.map(res => (res[0] && res[0].transcript) ? res[0].transcript.trim() : "").join(' ').trim();
 
-        if (!text) return;
+          const lastIndex = ev.results.length - 1;
+          const lastResult = ev.results[lastIndex];
+          const isFinal = !!lastResult.isFinal;
 
-        if (isFinal) {
-          setCaptions(prev => {
-            const p = prev.slice();
-            if (p.length && p[p.length - 1] && !p[p.length - 1].__final) {
-              p[p.length - 1] = { text, from: name || "You", time: Date.now(), __final: true };
-            } else {
-              p.push({ text, from: name || "You", time: Date.now(), __final: true });
-            }
-            return p;
-          });
+          if (!transcript) return;
 
-          // broadcast only final captions
-          sendChatMessage && sendChatMessage(roomId, {
+          // Update local UI
+          if (isFinal) {
+            setCaptions(prev => {
+              const p = prev.slice();
+              if (p.length && p[p.length - 1] && !p[p.length - 1].__final) {
+                p[p.length - 1] = { text: transcript, from: name || "You", time: Date.now(), __final: true };
+              } else {
+                p.push({ text: transcript, from: name || "You", time: Date.now(), __final: true });
+              }
+              return p;
+            });
+          } else {
+            setCaptions(prev => {
+              const p = prev.slice();
+              if (p.length && p[p.length - 1] && !p[p.length - 1].__final) {
+                p[p.length - 1] = { ...p[p.length - 1], text: transcript, time: Date.now(), __final: false };
+              } else {
+                p.push({ text: transcript, from: name || "You", time: Date.now(), __final: false });
+              }
+              return p;
+            });
+          }
+
+          // Build payload for DataChannel
+          const dcPayload = {
             type: "caption",
-            from: name,
-            text,
+            text: transcript,
+            fromName: name || "You",
             time: Date.now(),
-            isFinal: true
-          });
-        } else {
-          setCaptions(prev => {
-            const p = prev.slice();
-            if (p.length && p[p.length - 1] && !p[p.length - 1].__final) {
-              p[p.length - 1] = { ...p[p.length - 1], text, time, __final: false };
-            } else {
-              p.push({ text, from: name || "You", time: Date.now(), __final: false });
+            isFinal
+          };
+
+          // Try DataChannel fast path (if available)
+          let sentCount = 0;
+          try {
+            if (typeof sendCaptionToAll === "function") {
+              sentCount = sendCaptionToAll(dcPayload);
             }
-            return p;
-          });
+          } catch (e) {
+            console.warn("sendCaptionToAll failed", e);
+            sentCount = 0;
+          }
+
+          // Always still send to websocket backend for translation/history (server-side)
+          try {
+            if (typeof sendChatMessage === "function") {
+              // derive short code from liveCcLang (e.g. "te" from "te-IN" or "te")
+              const shortLang = (liveCcLang || "en-US").split("-")[0].toLowerCase();
+              sendChatMessage(roomId, {
+                type: "caption",
+                from: name,
+                text: transcript,
+                time: Date.now(),
+                isFinal: isFinal,
+                targetLang: shortLang // <-- NEW: tells server which language to prioritize/translate into
+              });
+            }
+          } catch (e) { console.warn("send caption ws failed", e); }
+
+        } catch (e) {
+          console.warn("onresult handler failed", e);
         }
       };
 
       r.onerror = (e) => console.warn("speech err", e);
       r.onend = () => {
+        // auto-restart if enabled
         if (liveCcEnabled) {
           try { r.start(); } catch(_) {}
         }
@@ -671,6 +630,38 @@ export default function MeetingPage() {
     }
   };
 
+  // RecordingIndicator component
+  const RecordingIndicator = () => {
+    if (!isRecording) return null;
+    const hhmmss = formatRecordingTime(recordingTime);
+    return (
+      <div className="recording-indicator" style={{
+        position: "fixed",
+        top: 90,
+        right: 22,
+        zIndex: 3000,
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        background: "rgba(0,0,0,0.6)",
+        color: "#fff",
+        padding: "6px 10px",
+        borderRadius: 20,
+        boxShadow: "0 8px 24px rgba(0,0,0,0.35)"
+      }}>
+        <span style={{
+          width: 10, height: 10, borderRadius: 6,
+          background: "#ff4b4b",
+          boxShadow: "0 0 10px rgba(255,75,75,0.9)",
+          animation: "pulse 1.2s infinite"
+        }} />
+        <div style={{ fontSize: 13, fontWeight: 700 }}>REC</div>
+        <div style={{ fontSize: 13, opacity: 0.92 }}>{hhmmss}</div>
+        <style>{`@keyframes pulse { 0% { transform: scale(.9); opacity:1 } 50% { transform: scale(1.2); opacity:.5 } 100% { transform: scale(.9); opacity:1 } }`}</style>
+      </div>
+    );
+  };
+
   return (
     <div className={`meeting-page premium ${pinnedId ? "spotlight-active" : ""}`}>
       <Toolbar
@@ -690,20 +681,33 @@ export default function MeetingPage() {
         onEndMeeting={handleEndMeeting}
         camOn={camOn}
         micOn={micOn}
-        // UPDATED: Recording props with real functionality
+        // Recording props
         onStartRecording={handleStartRecording}
         onStopRecording={handleStopRecording}
         isRecording={isRecording}
         recordingTime={recordingTime}
         recordedUrl={lastRecordingUrl || recordedUrl}
         onDownloadRecording={handleDownloadRecording}
+        // LIVE CC props (wired)
+        liveCcEnabled={liveCcEnabled}
+        onToggleLiveCc={handleToggleLiveCc}
+        liveCcLang={liveCcLang}
+        onChangeLiveCcLang={handleChangeLiveCcLang}
       />
 
       <div className="meeting-body">
         <div className="video-grid-wrapper" style={{ padding: 20 }}>
           <div className="gallery-area" style={{ display: "flex", gap: 18, alignItems: "flex-start" }}>
-            <div className="video-box.local hero" style={{ width: 720, height: 450, borderRadius: 12 }}>
-              <div ref={localPreviewRef} style={{ width: "100%", height: "100%" }} />
+            {/* HERO AREA - main stage */}
+            <div className="video-box local hero" style={{ flex: "0 0 auto", width: "min(68vw, 680px)", height: "min(48vh, 420px)", borderRadius: 12, position: "relative", overflow: "hidden" }}>
+              <video
+                ref={localVideoElRef}
+                autoPlay
+                playsInline
+                muted
+                className="local-camera-video"
+                style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 12 }}
+              />
             </div>
 
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -752,7 +756,11 @@ export default function MeetingPage() {
         </div>
       </div>
 
-      <LiveCaptionBar captions={captions} visible={liveCcEnabled} maxLines={2} />
+      {/* Recording indicator */}
+      <RecordingIndicator />
+
+      {/* Pass selectedLang so LiveCaptionBar uses translation keys when available */}
+      <LiveCaptionBar captions={captions} visible={liveCcEnabled} selectedLang={liveCcLang} maxLines={6} />
 
       <InviteModal
         open={inviteOpen}
