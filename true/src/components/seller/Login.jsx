@@ -1,4 +1,4 @@
-// src/components/seller/Login.jsx
+// src/components/seller/Login.jsx - This file is already correct
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 

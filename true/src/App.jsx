@@ -1,44 +1,40 @@
 // src/App.jsx
+import React from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 
-import MainLayout from "./components/layout/MainLayout.jsx";
+// Import all components
+import AddProduct from "./components/seller/AddProduct";
+import MyProducts from "./components/seller/MyProducts";
+import BuyerDashboard from "./components/Buyer/BuyerDashboard";
 
-// Seller pages
-import Login from "./components/seller/Login.jsx";
-import AddProduct from "./components/seller/AddProduct.jsx";
-import MyProducts from "./components/seller/MyProducts.jsx";
-
-// Buyer page
-import BuyerDashboard from "./components/Buyer/BuyerDashboard.jsx";
+// Simple test component to check if routing works
+const TestComponent = () => {
+  return (
+    <div style={{ padding: '20px' }}>
+      <h1>Test Component - Routing Works!</h1>
+      <p>If you see this, then routing is working.</p>
+      <p>Check your browser console (F12) for errors.</p>
+    </div>
+  );
+};
 
 function App() {
-  const isAuthenticated = !!localStorage.getItem("token");
-
   return (
     <Router>
       <Routes>
-
-        {/* Public Route */}
-        <Route path="/login" element={<Login />} />
-
-        {/* Protected Routes */}
-        {isAuthenticated ? (
-          <Route path="/" element={<MainLayout />}>
-
-            <Route index element={<Navigate to="/buyer-dashboard" />} />
-
-            {/* Buyer */}
-            <Route path="buyer-dashboard" element={<BuyerDashboard />} />
-
-            {/* Seller pages */}
-            <Route path="seller/my-products" element={<MyProducts />} />
-            <Route path="seller/add-product" element={<AddProduct />} />
-
-            <Route path="*" element={<Navigate to="/buyer-dashboard" />} />
-          </Route>
-        ) : (
-          <Route path="*" element={<Navigate to="/login" />} />
-        )}
+        {/* TEST Route - Remove this after testing */}
+        <Route path="/test" element={<TestComponent />} />
+        
+        {/* Main routes */}
+        <Route path="/" element={<BuyerDashboard />} />
+        <Route path="/buyer" element={<BuyerDashboard />} />
+        
+        {/* Seller Routes */}
+        <Route path="/seller/add-product" element={<AddProduct />} />
+        <Route path="/seller/my-products" element={<MyProducts />} />
+        
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Router>
   );
